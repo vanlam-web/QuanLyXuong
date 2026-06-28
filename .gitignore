@@ -1,0 +1,39 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# PyInstaller/build outputs
+build/
+dist/
+*.pkg
+*.toc
+*.pyz
+*.manifest
+base_library.zip
+xref-*.html
+warn-*.txt
+
+# Local executables and runtime data
+*.exe
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.pma
+
+# Secrets/local config
+.env
+*.local
+HD.txt
+KhoiDongBot.bat
+
+# Old snapshots may contain hardcoded secrets
+05062026-1632/
+
+# Browser/user profiles
+Bot_Profile/
+Data_Auto_CRM/
+

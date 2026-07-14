@@ -412,6 +412,13 @@ def active_progress_label(machine_meta):
     except Exception:
         return ""
 
+def estimate_tap_line_progress(elapsed_seconds, line_count):
+    lines = safe_float(line_count)
+    if elapsed_seconds <= 0 or lines <= 0:
+        return None
+    expected_seconds = max(180.0, lines / 9.0)
+    return max(1, min(99, int(round(elapsed_seconds * 100 / expected_seconds))))
+
 def estimate_active_progress(file_name, history_data, completed_samples, machine_meta=None, now_dt=None):
     history = load_history(history_data)
     start_dt = active_start_time(history_data, "")
@@ -447,6 +454,16 @@ def estimate_active_progress(file_name, history_data, completed_samples, machine
                 durations.append(sample_duration * ratio)
 
     if not durations:
+        source_kind = str(meta.get("source_kind") or "").lower()
+        is_tap = source_kind == "tap" or str(file_name or "").lower().endswith(".tap")
+        if is_tap and active_lines > 0:
+            percent = estimate_tap_line_progress(elapsed, active_lines)
+            if percent is not None:
+                return {
+                    "progress_percent": percent,
+                    "progress_source": "tap_line_fallback",
+                    "progress_label": f"Tiến độ: {percent}% ước tính",
+                }
         return {"progress_percent": None, "progress_source": "unknown", "progress_label": ""}
 
     expected = sorted(durations)[len(durations) // 2]
@@ -1428,6 +1445,50 @@ HTML_TEMPLATE = """
         .main-tab-panel.active { min-height: 0; overflow: hidden; }
         .compact-board { min-height: 0; overflow: hidden; }
         .compact-board .column { min-width: 0; min-height: 0; }
+        .stage-tabs {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 4px;
+            padding: 0 var(--space-2) var(--space-2);
+            flex-shrink: 0;
+        }
+        .problem-tabs {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .stage-tab {
+            min-width: 0;
+            min-height: 28px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: #101722;
+            color: var(--muted);
+            font-size: var(--font-sm);
+            font-weight: 800;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .stage-tab span {
+            min-width: 18px;
+            padding: 1px 5px;
+            border-radius: 999px;
+            background: #2a303d;
+            color: var(--text);
+            font-size: 11px;
+            line-height: 16px;
+        }
+        .stage-tab.active {
+            color: #fff;
+            border-color: #60a5fa;
+            background: #173154;
+        }
+        .stage-tab.active span {
+            background: #eff6ff;
+            color: #0f172a;
+        }
         .problem-column { gap: 0; }
         .problem-stack {
             display: grid;
@@ -1996,20 +2057,23 @@ HTML_TEMPLATE = """
 
             <section id="main-tab-production" class="main-tab-panel active">
                 <div class="compact-board">
-                    <div class="column col-export queue-column"><h2>Hàng chờ <span class="count-badge" id="count-queue">0</span></h2><div id="queue-list" class="list-container"></div></div>
+                    <div class="column col-export queue-column">
+                        <h2>Hàng chờ <span class="count-badge" id="count-queue">0</span></h2>
+                        <div class="stage-tabs" role="tablist" aria-label="Hàng chờ">
+                            <button id="queue-tab-export" class="stage-tab active" type="button" data-stage-key="EXPORTED" onclick="setProductionQueueTab('EXPORTED')">Xuất <span id="count-queue-export">0</span></button>
+                            <button id="queue-tab-rip" class="stage-tab" type="button" data-stage-key="RIP" onclick="setProductionQueueTab('RIP')">RIP <span id="count-queue-rip">0</span></button>
+                            <button id="queue-tab-running" class="stage-tab" type="button" data-stage-key="RUNNING" onclick="setProductionQueueTab('RUNNING')">Đang chạy <span id="count-queue-running">0</span></button>
+                        </div>
+                        <div id="queue-list" class="list-container"></div>
+                    </div>
                     <div class="column col-done"><h2>In xong <span class="count-badge" id="count-done-compact">0</span></h2><div id="done-compact-list" class="list-container"></div></div>
                     <div class="column col-cancel problem-column">
                         <h2>Lỗi / thao tác <span class="count-badge" id="count-problem">0</span></h2>
-                        <div class="problem-stack">
-                            <div class="problem-section" id="true-problem-section">
-                                <h3>Lỗi thật <span class="count-badge" id="count-true-problem">0</span></h3>
-                                <div id="true-problem-list" class="list-container"></div>
-                            </div>
-                            <div class="problem-section" id="removed-problem-section">
-                                <h3>Xóa / hủy <span class="count-badge" id="count-removed-problem">0</span></h3>
-                                <div id="removed-problem-list" class="list-container"></div>
-                            </div>
+                        <div class="stage-tabs problem-tabs" role="tablist" aria-label="Lỗi và thao tác">
+                            <button id="problem-tab-removed" class="stage-tab active" type="button" data-stage-key="REMOVED" onclick="setProductionProblemTab('REMOVED')">Hủy <span id="count-problem-removed">0</span></button>
+                            <button id="problem-tab-canceled" class="stage-tab" type="button" data-stage-key="CANCELED" onclick="setProductionProblemTab('CANCELED')">Lỗi <span id="count-problem-canceled">0</span></button>
                         </div>
+                        <div id="problem-list" class="list-container"></div>
                     </div>
                 </div>
                 <div id="compact-empty-state" class="empty-state">Chưa có việc trong bộ lọc này.</div>
@@ -2882,6 +2946,8 @@ HTML_TEMPLATE = """
 
         // ================= BOARD LOGIC =================
         let allData = { EXPORTED: [], RIP: [], RUNNING: [], DONE: [], CANCELED: [], REMOVED: [] };
+        let productionQueueTab = 'EXPORTED';
+        let productionProblemTab = 'REMOVED';
         let previewPinned = false;
         let previewHoverCard = null;
         let currentPreviewFile = null;
@@ -3351,8 +3417,24 @@ HTML_TEMPLATE = """
             return Number(counts[key] ?? fallback ?? 0);
         }
 
+        function setProductionQueueTab(tab) {
+            productionQueueTab = tab;
+            renderData();
+        }
+
+        function setProductionProblemTab(tab) {
+            productionProblemTab = tab;
+            renderData();
+        }
+
+        function setStageTabActive(prefix, activeKey) {
+            document.querySelectorAll(`[id^="${prefix}-tab-"]`).forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.stageKey === activeKey);
+            });
+        }
+
         function attachBoardScrollLoaders() {
-            const ids = ['queue-list', 'done-compact-list', 'true-problem-list', 'removed-problem-list'];
+            const ids = ['queue-list', 'done-compact-list', 'problem-list'];
             ids.forEach(id => {
                 const el = document.getElementById(id);
                 if (!el || el.dataset.scrollBound === '1') return;
@@ -3362,10 +3444,9 @@ HTML_TEMPLATE = """
                     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
                     if (!nearBottom) return;
                     const hasMore =
-                        (id === 'queue-list' && (allData.EXPORTED.length + allData.RIP.length + allData.RUNNING.length) < boardCount('QUEUE')) ||
+                        (id === 'queue-list' && (allData[productionQueueTab] || []).length < boardCount(productionQueueTab)) ||
                         (id === 'done-compact-list' && allData.DONE.length < boardCount('DONE')) ||
-                        (id === 'true-problem-list' && allData.CANCELED.length < boardCount('CANCELED')) ||
-                        (id === 'removed-problem-list' && allData.REMOVED.length < boardCount('REMOVED'));
+                        (id === 'problem-list' && (allData[productionProblemTab] || []).length < boardCount(productionProblemTab));
                     if (!hasMore) return;
                     loadMoreBoard();
                 });
@@ -3447,19 +3528,25 @@ HTML_TEMPLATE = """
                 let fExport = (allData.EXPORTED || []).filter(filterFn).sort(sortFn); let fRip = (allData.RIP || []).filter(filterFn).sort(sortFn); let fRun = (allData.RUNNING || []).filter(filterFn).sort(sortFn); let fDone = (allData.DONE || []).filter(filterFn).sort(sortFn); let fCancel = (allData.CANCELED || []).filter(filterFn).sort(sortFn); let fRemoved = (allData.REMOVED || []).filter(filterFn).sort(sortFn);
                 renderAttention(filter);
 
-                const queueItems = fExport.map(f => ({...f, stage_label: 'Xuất'}))
-                    .concat(fRip.map(f => ({...f, stage_label: 'RIP'})))
-                    .concat(fRun.map(f => ({...f, stage_label: 'Đang chạy'})))
-                    .sort(sortFn);
+                const queueByStage = {
+                    EXPORTED: fExport.map(f => ({...f, stage_label: 'Xuất'})),
+                    RIP: fRip.map(f => ({...f, stage_label: 'RIP'})),
+                    RUNNING: fRun.map(f => ({...f, stage_label: 'Đang chạy'})),
+                };
+                const queueItems = (queueByStage[productionQueueTab] || queueByStage.EXPORTED).sort(sortFn);
                 const trueProblemItems = fCancel.map(f => ({...f, stage_label: 'Lỗi'})).sort(sortFn);
                 const removedProblemItems = fRemoved.map(f => ({...f, stage_label: 'Xóa'})).sort(sortFn);
-                const problemItems = trueProblemItems.concat(removedProblemItems).sort(sortFn);
-                document.getElementById('queue-list').innerHTML = renderCardList(queueItems, boardCount('QUEUE', queueItems.length));
+                const problemByStage = {
+                    CANCELED: trueProblemItems,
+                    REMOVED: removedProblemItems,
+                };
+                const problemItems = (problemByStage[productionProblemTab] || problemByStage.REMOVED).sort(sortFn);
+                const problemTotal = boardCount('PROBLEM', trueProblemItems.length + removedProblemItems.length);
+                document.getElementById('queue-list').innerHTML = renderCardList(queueItems, boardCount(productionQueueTab, queueItems.length));
                 document.getElementById('done-compact-list').innerHTML = renderCardList(fDone, boardCount('DONE', fDone.length));
-                document.getElementById('true-problem-list').innerHTML = renderCardList(trueProblemItems, boardCount('CANCELED', trueProblemItems.length));
-                document.getElementById('removed-problem-list').innerHTML = renderCardList(removedProblemItems, boardCount('REMOVED', removedProblemItems.length));
-                document.getElementById('true-problem-section')?.classList.toggle('is-empty', trueProblemItems.length === 0 && problemItems.length > 0);
-                document.getElementById('removed-problem-section')?.classList.toggle('is-empty', removedProblemItems.length === 0 && problemItems.length > 0);
+                document.getElementById('problem-list').innerHTML = renderCardList(problemItems, boardCount(productionProblemTab, problemItems.length));
+                setStageTabActive('queue', productionQueueTab);
+                setStageTabActive('problem', productionProblemTab);
 
                 document.getElementById('exported-list').innerHTML = renderCardList(fExport, boardCount('EXPORTED', fExport.length));
                 document.getElementById('rip-list').innerHTML = renderCardList(fRip, boardCount('RIP', fRip.length));
@@ -3471,9 +3558,9 @@ HTML_TEMPLATE = """
                 attachBoardScrollLoaders();
 
                 const compactCounts = [
-                    ['queue-list', boardCount('QUEUE', queueItems.length)],
+                    ['queue-list', boardCount('QUEUE', fExport.length + fRip.length + fRun.length)],
                     ['done-compact-list', boardCount('DONE', fDone.length)],
-                    ['true-problem-list', boardCount('PROBLEM', problemItems.length)],
+                    ['problem-list', problemTotal],
                 ];
                 const compactHasAny = compactCounts.some(([, value]) => value > 0);
                 document.querySelector('.compact-board')?.classList.toggle('all-empty', !compactHasAny);
@@ -3489,11 +3576,14 @@ HTML_TEMPLATE = """
                     ['count-done', boardCount('DONE', fDone.length)],
                     ['count-cancel', boardCount('CANCELED', fCancel.length)],
                     ['count-removed', boardCount('REMOVED', fRemoved.length)],
-                    ['count-queue', boardCount('QUEUE', queueItems.length)],
+                    ['count-queue', boardCount('QUEUE', fExport.length + fRip.length + fRun.length)],
+                    ['count-queue-export', boardCount('EXPORTED', fExport.length)],
+                    ['count-queue-rip', boardCount('RIP', fRip.length)],
+                    ['count-queue-running', boardCount('RUNNING', fRun.length)],
                     ['count-done-compact', boardCount('DONE', fDone.length)],
-                    ['count-problem', boardCount('PROBLEM', problemItems.length)],
-                    ['count-true-problem', boardCount('CANCELED', trueProblemItems.length)],
-                    ['count-removed-problem', boardCount('REMOVED', removedProblemItems.length)],
+                    ['count-problem', problemTotal],
+                    ['count-problem-canceled', boardCount('CANCELED', trueProblemItems.length)],
+                    ['count-problem-removed', boardCount('REMOVED', removedProblemItems.length)],
                 ];
                 const hasAnyColumnData = columnCounts.some(([, value]) => value > 0);
                 columnCounts.forEach(([id, value]) => {

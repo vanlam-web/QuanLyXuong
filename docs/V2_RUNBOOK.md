@@ -180,6 +180,27 @@ Can xem trong tab `He thong`:
 
 API may doc duoc: `http://<server-ip>:5000/api/v2_status`.
 
+## Kiem tra khi bao cao khach/m2 sai
+
+Trieu chung da gap:
+
+- Khach `QUOCHOANG` tung hien `99.59 m2` vi file `quochoang_366x2544.prt` bi doc thanh `366 x 2544 cm`.
+- Gia tri dung sau rule outlier la `9.31104 m2` cho rieng file nay.
+
+Checklist:
+
+1. Xem file cua khach trong DB may lien quan.
+2. Uu tien so `area_m2` trong `machine_meta_json` neu co.
+3. Neu chi con ten file, parse kich thuoc nhung phai soi outlier:
+   - kich thuoc 4 chu so co the la thieu dau thap phan;
+   - neu m2 vuot bat thuong, can chia lai chieu 4 chu so theo rule parser chung.
+4. Khong hard-code theo ten khach. Them test bang ten file that de rule ap dung cho khach khac.
+5. Sau khi sua, kiem tra lai:
+   - top khach;
+   - bieu do khach khi click cot;
+   - chi so duoi cung theo khach;
+   - sidebar thong ke theo `m2`.
+
 ## Preflight truoc khi thay V1 bang V2
 
 Chay:

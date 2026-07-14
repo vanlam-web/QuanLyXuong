@@ -1473,6 +1473,7 @@ Kiem chung:
   - Tong `99.59 m2`.
   - `Truc tiep: Bat`.
 - `python -m unittest discover -s Z:\Tools\tests` -> 115 test OK.
+
 - Browser sau reload:
   - `socket = Truc tiep: Bat`.
   - `10~tho_119x191.prn` co trong `In xong`.
@@ -1480,6 +1481,72 @@ Kiem chung:
   - `10~tho_119x191.prn` khong con trong `Xoa/Huy`.
   - `11~ghep_105x220.prn` khong con trong `Xoa/Huy`.
   - `Xoa/Huy` con 1 item: `ns_64x58.tif`.
+
+## Ghim loi tinh m2 theo ten file khach QUOCHOANG 2026-07-14
+
+Van de:
+
+- Bao cao khach hang `QUOCHOANG` tung hien gan `99.59 m2`.
+- Nguoi dung nghi du lieu sai khi chon khach trong bao cao.
+- Bieu do/summary khach khong sai cach ve; so dau vao m2 da bi phong dai.
+
+Nguyen nhan:
+
+- File `quochoang_366x2544.prt` co kich thuoc trong ten dang `366x2544`.
+- Parser cu doc thang la `366 cm x 2544 cm` -> `93.1104 m2`.
+- Thuc te mau ten nay la thieu dau thap phan o chieu 4 chu so: `2544` phai doc la `254.4 cm`.
+- Gia tri dung cua file la `366 x 254.4 cm` -> `9.31104 m2`.
+
+Da chot:
+
+- Day la loi parser m2 tu ten file, khong phai loi may in/cat hay loi dashboard chart.
+- Khong hard-code theo khach `QUOCHOANG`.
+- `best_area_m2()` phai uu tien `machine_meta_json.area_m2` neu co.
+- `parse_area_python()` chi fallback khi khong co meta va phai co rule outlier:
+  - neu m2 parse vuot `50`;
+  - va co chieu 4 chu so;
+  - chia chieu 4 chu so cho `10`;
+  - tinh lai m2.
+- Test neo:
+  - `quochoang_366x2544.prt` -> `9.31104 m2`.
+  - `NTDQq_800x310.prt` -> `24.8 m2`.
+
+Checklist cho khach khac sau nay:
+
+1. Lay danh sach file cua khach trong DB.
+2. So sanh m2 tu `machine_meta_json.area_m2` voi m2 parse tu ten file.
+3. Neu ten file co chieu 4 chu so va m2 bat thuong, coi la outlier truoc khi ket luan khach lam file lon.
+4. Them test bang ten file that.
+5. Doi chieu lai `/api/stats`:
+   - `customers_m2`;
+   - `customer_detail.summary.total_m2`;
+   - `machine_flow_m2`;
+   - sidebar theo metric `m2`.
+
+## Ghim loi job TAP dang chay khong hien phan tram 2026-07-14
+
+Van de:
+
+- Card `f3_120x75.tap` dang `Dang chay` luc `08:24:25` nhung khong hien `%`.
+- Preview co meta ro:
+  - `source_kind=tap`;
+  - `line_count=3339`;
+  - kich thuoc cat khoang `120.2 x 76.2 cm`;
+  - `area_m2=0.9155`.
+
+Nguyen nhan:
+
+- May/CNC khong tra `progress_percent` that.
+- Dashboard chi uoc tinh khi co file DONE mau co `line_count` gan tuong tu.
+- Luc job moi dang chay, neu query khong co sample DONE phu hop thi `progress_label` bi de rong, nen card nhin nhu thieu tien do.
+
+Da chot:
+
+- Neu co `%` that tu may, uu tien so that.
+- Neu khong co `%` that nhung co sample DONE tuong tu, uoc tinh theo thoi gian sample.
+- Neu la TAP/CNC co `line_count` nhung chua co sample, fallback uoc tinh theo `line_count`.
+- Fallback phai ghi `ước tính`, khong hien nhu so that.
+- Test neo: `f3_120x75.tap`, `line_count=3339`, sau 186 giay tu `CUTTING` -> `50% ước tính`.
 
 ## Bao cao khach 1 moc du lieu khong thay bieu do 2026-07-13 19:45
 

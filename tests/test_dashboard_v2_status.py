@@ -483,6 +483,19 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertEqual(progress["progress_percent"], 30)
         self.assertEqual(progress["progress_label"], "Tiến độ: 30% ước tính")
 
+    def test_estimate_active_progress_uses_tap_line_count_without_done_samples(self):
+        progress = Dashboard.estimate_active_progress(
+            "f3_120x75.tap",
+            '[{"status":"CUTTING","time":"2026-07-14 08:24:25"}]',
+            [],
+            {"source_kind": "tap", "line_count": 3339},
+            now_dt=Dashboard.datetime.strptime("2026-07-14 08:27:31", "%Y-%m-%d %H:%M:%S"),
+        )
+
+        self.assertEqual(progress["progress_source"], "tap_line_fallback")
+        self.assertEqual(progress["progress_percent"], 50)
+        self.assertEqual(progress["progress_label"], "Tiến độ: 50% ước tính")
+
     def test_dedupe_visible_items_keeps_latest_duplicate_cancel(self):
         items = [
             {"machine": "InDecal", "name": "14~xpppp1_122x164.prn", "cancel_type": "production_cancel", "updated": "2026-07-13 15:38:33"},
@@ -962,15 +975,23 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertIn(".compact-board.all-empty + .empty-state", html)
         self.assertIn("Hàng chờ", html)
         self.assertIn("In xong", html)
-        self.assertIn("Lỗi thật", html)
-        self.assertIn("Xóa / hủy", html)
+        self.assertIn("Lỗi", html)
+        self.assertIn("Hủy", html)
         self.assertIn('class="column col-export queue-column"', html)
         self.assertIn('id="queue-list"', html)
+        self.assertIn('id="queue-tab-export"', html)
+        self.assertIn('id="queue-tab-rip"', html)
+        self.assertIn('id="queue-tab-running"', html)
+        self.assertIn("function setProductionQueueTab(tab)", html)
         self.assertNotIn('id="run-compact-list"', html)
         self.assertIn('class="column col-cancel problem-column"', html)
-        self.assertIn('class="problem-stack"', html)
-        self.assertIn('id="true-problem-list"', html)
-        self.assertIn('id="removed-problem-list"', html)
+        self.assertIn('id="problem-tab-canceled"', html)
+        self.assertIn('id="problem-tab-removed"', html)
+        self.assertIn('id="problem-list"', html)
+        self.assertIn("function setProductionProblemTab(tab)", html)
+        self.assertNotIn('class="problem-stack"', html)
+        self.assertNotIn('id="true-problem-list"', html)
+        self.assertNotIn('id="removed-problem-list"', html)
         self.assertIn('repeat(3, minmax(220px, 1fr))', html)
         self.assertIn('grid-template-columns: repeat(2, minmax(220px, 1fr))', html)
         self.assertIn('@media screen and (min-width: 1800px)', html)

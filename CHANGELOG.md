@@ -4,6 +4,17 @@ Tat ca thay doi quan trong cua he thong Quan Ly Xuong se ghi o day.
 
 ## Unreleased
 
+- Ghim loi va quy tac tinh m2 theo ten file:
+  - Bao cao khach co the sai lon neu ten file thieu dau thap phan, vi du `quochoang_366x2544.prt` bi doc thanh `366 x 2544 cm`.
+  - Parser phai coi kich thuoc tao ra m2 qua lon bat thuong la outlier va chia lai chieu 4 chu so theo ti le `/10` khi hop ly.
+  - Bao cao khach hang phai uu tien `machine_meta_json.area_m2` neu co, sau do moi fallback ve parse ten file.
+  - Da co test neo `quochoang_366x2544.prt = 9.31104 m2` va `NTDQq_800x310.prt = 24.8 m2`.
+- Sua tien do CNC/TAP dang chay:
+  - Neu may khong tra `%` that va chua co mau DONE tuong tu, Dashboard uoc tinh bang `line_count`.
+  - Nhan luon ghi `ước tính` de phan biet voi `%` that tu may.
+- Cap nhat man hinh `San xuat`:
+  - Cot `Hang cho` co tab `Xuat/RIP/Dang chay` de xem rieng tung trang thai.
+  - Cot `Loi / thao tac` doi thanh tab `Huy/Loi`, khong chia 2 khung tren duoi nua.
 - Cap nhat Dashboard compact:
   - Sidebar thong ke hien `Tong | hoan thanh | loi` tren mot hang, so tong lon va tach mau hoan thanh/loi.
   - Moi may `InBat/InDecal/CNC` hien ca so hoan thanh va so loi theo metric dang chon (`So luong` hoac `m2`).

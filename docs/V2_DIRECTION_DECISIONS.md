@@ -127,6 +127,11 @@ m2_hong_uoc_tinh / (m2_hoan_thanh + m2_hong_uoc_tinh) * 100
 ```
 
 7. Khong tinh ti le loi bang so file nua, vi khong dung thuc te san xuat.
+8. Rieng job CNC/TAP dang chay:
+   - Neu may khong tra `%` that va chua co mau DONE phu hop, Dashboard duoc uoc tinh bang `machine_meta_json.line_count`.
+   - Nguong fallback hien tai: thoi gian du kien = `max(180 giay, line_count / 9)`.
+   - Label bat buoc co chu `ước tính`, vi day khong phai `%` that tu may.
+   - Vi du `f3_120x75.tap` co `line_count=3339`; sau 186 giay tu moc `CUTTING`, Dashboard hien khoang `50% ước tính`.
 
 ### In lai va so luong dung
 
@@ -269,6 +274,8 @@ m2_hong_uoc_tinh / (m2_hoan_thanh + m2_hong_uoc_tinh) * 100
    - API `/api/data` ho tro `limit`.
    - Dashboard tai 20 the dau, cuon/bam de tai tiep.
    - Badge/count va thong ke van dung tong that, khong phu thuoc so the dang render.
+   - Cot `Hang cho` trong dashboard compact hien tab `Xuat/RIP/Dang chay`; header van la tong hang cho.
+   - Cot `Loi / thao tac` hien tab `Huy/Loi`; header van la tong loi + thao tac, danh sach hien theo tab dang chon.
 9. Loading:
    - Doi bo loc phai co dau hieu dang tai.
    - Ket qua request cu bi bo qua neu co request moi hon, tranh nhay nguoc du lieu.
@@ -280,3 +287,26 @@ m2_hong_uoc_tinh / (m2_hoan_thanh + m2_hong_uoc_tinh) * 100
    - Neu chi doi giao dien/API Dashboard, chi build/copy/restart `Dashboard_Local.exe`.
    - Khong restart server hoac client may san xuat khi khong can.
    - Luon chay unit test va browser smoke truoc khi bao xong.
+
+## Quyet dinh bo sung ngay 2026-07-14 - Bao cao m2 theo khach
+
+1. Loi goc da gap voi `QUOCHOANG`:
+   - File `quochoang_366x2544.prt` bi parser cu doc la `366 x 2544 cm`.
+   - Ket qua thanh `93.1104 m2`, lam top khach va bieu do khach lech thanh `99.59 m2`.
+   - Thuc te phai hieu `2544` la `254.4 cm` trong truong hop outlier, nen file nay la `9.31104 m2`.
+2. Day la loi tinh m2 tu ten file, khong phai loi trang thai may.
+3. Nguon tinh m2:
+   - Uu tien `machine_meta_json.area_m2` neu co, vi day la meta doc tu file/may that.
+   - Neu khong co meta thi moi parse ten file.
+   - Neu parse ten file tao ra m2 qua lon bat thuong va co chieu 4 chu so, can ap dung rule outlier thay vi tin tuyet doi ten file.
+4. Khong sua rieng theo ten khach.
+   - Rule phai ap dung cho moi khach co mau ten tuong tu.
+   - Test phai co it nhat 1 mau khach that va 1 mau khach khac de tranh hard-code.
+5. Test neo hien tai:
+   - `quochoang_366x2544.prt` -> `9.31104 m2`.
+   - `NTDQq_800x310.prt` -> `24.8 m2`.
+6. Khi nguoi dung bao "khach X sai du lieu", quy trinh bat buoc:
+   - Tim cac file cua khach do trong DB.
+   - So sanh `machine_meta_json.area_m2`, kich thuoc that trong meta, va m2 parse tu ten file.
+   - Neu chenh lech lon, sua parser/rule chung va them test bang file that.
+   - Chay lai `/api/stats` de doi chieu top khach, chi so khach, va bieu do drill-down.

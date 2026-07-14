@@ -4,6 +4,11 @@ Tat ca thay doi quan trong cua he thong Quan Ly Xuong se ghi o day.
 
 ## Unreleased
 
+- Cap nhat nhan dien Dashboard `:5000`:
+  - Doi chu `Xuong V2` goc trai thanh logo QC dung chung voi POS.
+  - Them icon rieng co mau cho `InBat`, `InDecal`, `CNC` tren sidebar, thong ke, badge card va danh sach chu y.
+  - Doi nut quan tri goc phai tu banh rang sang icon tai khoan.
+  - Restart Dashboard copy kem thu muc `public/` de logo/icon chay duoc khi dung exe local.
 - Ghim loi va quy tac tinh m2 theo ten file:
   - Bao cao khach co the sai lon neu ten file thieu dau thap phan, vi du `quochoang_366x2544.prt` bi doc thanh `366 x 2544 cm`.
   - Parser phai coi kich thuoc tao ra m2 qua lon bat thuong la outlier va chia lai chieu 4 chu so theo ti le `/10` khi hop ly.

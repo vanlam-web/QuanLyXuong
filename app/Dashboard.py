@@ -15,6 +15,18 @@ ADMIN_PIN = os.getenv("DASHBOARD_ADMIN_PIN", "").strip()
 THUMB_DIR = os.path.join(DB_DIR, "Thumbnails")
 os.makedirs(THUMB_DIR, exist_ok=True)
 
+def dashboard_public_dir():
+    if getattr(sys, "frozen", False):
+        exe_public = os.path.join(os.path.dirname(sys.executable), "public")
+        if os.path.isdir(exe_public):
+            return exe_public
+        bundled_public = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(sys.executable)), "public")
+        if os.path.isdir(bundled_public):
+            return bundled_public
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "public"))
+
+PUBLIC_DIR = dashboard_public_dir()
+
 # LOG FILES
 LOG_FILE = r"C:\QuanLyXuong\Dashboard_Log.txt"
 SERVER_LOG_FILE = r"C:\QuanLyXuong\Server_Log.txt"
@@ -1220,7 +1232,15 @@ HTML_TEMPLATE = """
         * { box-sizing: border-box; }
         body { background: var(--bg); color: var(--text); height: 100vh; min-height: 100vh; overflow: hidden; padding: 16px; display: flex; flex-direction: column; letter-spacing: 0; }
         .top-navbar { justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 12px; }
-        .top-navbar::before { content: "Xưởng V2"; color: var(--text); font-size: 22px; font-weight: 900; white-space: nowrap; }
+        .top-navbar-brand { display: inline-grid; place-items: center; flex: 0 0 auto; width: 42px; height: 42px; overflow: hidden; border-radius: 8px; }
+        .top-navbar-logo { display: block; width: 100%; height: 100%; object-fit: cover; }
+        .machine-token { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+        .machine-token span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        .machine-icon { display: inline-block; width: 18px; height: 18px; flex: 0 0 18px; background: currentColor; mask: var(--machine-icon-url) center / contain no-repeat; -webkit-mask: var(--machine-icon-url) center / contain no-repeat; }
+        .machine-icon-InBat { --machine-icon-url: url("/assets/machine-icons/inbat.svg"); color: var(--machine-inbat); }
+        .machine-icon-InDecal { --machine-icon-url: url("/assets/machine-icons/indc.svg"); color: var(--machine-indecal); }
+        .machine-icon-CNC { --machine-icon-url: url("/assets/machine-icons/cnc.svg"); color: var(--machine-cnc); }
+        .account-icon { display: block; width: 18px; height: 18px; }
         .tab-btn { display: none; }
         .header-controls { position: static; margin-left: auto; }
         .login-btn, .erp-btn, .btn-excel { border-radius: 8px; border: 1px solid var(--line); background: var(--panel2) !important; color: var(--text) !important; min-height: 34px; }
@@ -1289,10 +1309,11 @@ HTML_TEMPLATE = """
         .list-more-note { width: 100%; padding: 8px; color: var(--muted); font-size: 11px; text-align: center; border: 1px dashed var(--line); border-radius: 6px; background: rgba(148,163,184,.06); cursor: pointer; }
         .list-more-note:hover { color: var(--text); border-color: #60a5fa; background: rgba(96,165,250,.12); }
         .badge, .badge-run { border-radius: 999px; }
-        .badge { margin-bottom: 0; }
-        .badge-InBat { background: var(--machine-inbat); color: #111; }
-        .badge-InDecal { background: var(--machine-indecal); color: #fff; }
-        .badge-CNC { background: var(--machine-cnc); color: #fff; }
+        .badge { display: inline-flex; align-items: center; gap: 5px; margin-bottom: 0; border: 1px solid var(--line); background: #11161f; color: var(--text); }
+        .badge .machine-icon { width: 14px; height: 14px; flex-basis: 14px; }
+        .badge-InBat { border-color: color-mix(in srgb, var(--machine-inbat) 48%, var(--line)); }
+        .badge-InDecal { border-color: color-mix(in srgb, var(--machine-indecal) 48%, var(--line)); }
+        .badge-CNC { border-color: color-mix(in srgb, var(--machine-cnc) 48%, var(--line)); }
         .badge-run { float: none; display: inline-block; margin-left: 4px; }
         .summary-panel { display: flex; gap: 10px; align-items: center; }
         .summary-title { margin: 0; white-space: nowrap; }
@@ -1312,7 +1333,8 @@ HTML_TEMPLATE = """
         .attention-item[data-machine="InBat"] { border-left-color: var(--machine-inbat); }
         .attention-item[data-machine="InDecal"] { border-left-color: var(--machine-indecal); }
         .attention-item[data-machine="CNC"] { border-left-color: var(--machine-cnc); }
-        .attention-title { font-size: 12px; font-weight: 900; color: var(--text); margin-bottom: 4px; }
+        .attention-title { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; font-weight: 900; color: var(--text); margin-bottom: 4px; }
+        .attention-title > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
         .attention-meta { font-size: 11px; color: #93c5fd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .attention-reason { font-size: 10px; color: var(--muted); margin-top: 4px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         #view-v2 .controls, #v2-status-body > .status-overview, #v2-status-body > .status-card.full:not(.machine-status-card), #view-v2 .ops-advanced { display: none; }
@@ -1367,6 +1389,7 @@ HTML_TEMPLATE = """
         }
         .sidebar-label { color: var(--muted); font-size: 11px; text-transform: uppercase; font-weight: 800; }
         .stat-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 6px 8px; background: #11161f; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; border-left: 5px solid #69758a; }
+        .stat-line .machine-icon { width: 20px; height: 20px; flex-basis: 20px; }
         .stat-line.machine-InBat { border-left-color: var(--machine-inbat); }
         .stat-line.machine-InDecal { border-left-color: var(--machine-indecal); }
         .stat-line.machine-CNC { border-left-color: var(--machine-cnc); }
@@ -1923,17 +1946,11 @@ HTML_TEMPLATE = """
             align-items: center;
             gap: 6px;
         }
-        .machine-name::before {
-            content: "";
-            width: 8px;
-            height: 8px;
-            border-radius: 999px;
-            background: #69758a;
-            flex: 0 0 auto;
+        .machine-name .machine-icon {
+            width: 22px;
+            height: 22px;
+            flex-basis: 22px;
         }
-        .machine-card[data-machine="InBat"] .machine-name::before { background: var(--machine-inbat); }
-        .machine-card[data-machine="InDecal"] .machine-name::before { background: var(--machine-indecal); }
-        .machine-card[data-machine="CNC"] .machine-name::before { background: var(--machine-cnc); }
         .machine-card .muted {
             font-size: 10px;
             line-height: 1.2;
@@ -1970,7 +1987,7 @@ HTML_TEMPLATE = """
         @media screen and (max-width: 900px) {
             body { padding: 10px; }
             .top-navbar { display: grid; grid-template-columns: 1fr auto; align-items: center; }
-            .top-navbar::before { grid-column: 1; }
+            .top-navbar-brand { grid-column: 1; }
             .header-controls { grid-column: 2; grid-row: 1; justify-self: end; margin-left: 0; }
             .compact-filters { grid-column: 1 / -1; grid-row: 2; flex-wrap: wrap; width: 100%; }
             .compact-shell { grid-template-columns: 1fr; }
@@ -1990,6 +2007,9 @@ HTML_TEMPLATE = """
 <body>
     
     <div class="top-navbar">
+        <div class="top-navbar-brand" aria-label="Xưởng V2">
+            <img class="top-navbar-logo" src="/assets/brand-logo.png" alt="">
+        </div>
         <div id="global-filter" class="controls compact-filters">
             <select id="erpQuickDate" class="quick-select" onchange="applyQuickDate()" title="Chọn nhanh ngày">
                 <option value="today" selected>Hôm nay</option>
@@ -2020,7 +2040,9 @@ HTML_TEMPLATE = """
         <div class="header-controls">
             <span id="socket-status" class="status-off">Đang kết nối...</span>
             <button id="refreshBtn" class="icon-btn" onclick="applyGlobalFilters()" title="Làm mới" aria-label="Làm mới"><span class="spin">↻</span></button>
-            <button id="authBtn" class="icon-btn login-btn" onclick="toggleAuth()" title="Đăng nhập quản trị" aria-label="Đăng nhập quản trị">⚙</button>
+            <button id="authBtn" class="icon-btn login-btn" onclick="toggleAuth()" title="Đăng nhập quản trị" aria-label="Đăng nhập quản trị">
+                <svg class="account-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="10" r="3"></circle><path d="M7 19c1.1-2.2 2.8-3.3 5-3.3s3.9 1.1 5 3.3"></path></svg>
+            </button>
         </div>
     </div>
 
@@ -2047,9 +2069,9 @@ HTML_TEMPLATE = """
                             <strong id="erp-total-error-main" class="total-summary-value error-value">0</strong>
                         </div>
                     </div>
-                    <div class="stat-line machine-InBat"><span>InBat</span><div class="metric-pair"><strong id="erp-inbat-value" class="done-value">0</strong><strong id="erp-inbat-error" class="error-value">0</strong></div></div>
-                    <div class="stat-line machine-InDecal"><span>InDecal</span><div class="metric-pair"><strong id="erp-indecal-value" class="done-value">0</strong><strong id="erp-indecal-error" class="error-value">0</strong></div></div>
-                    <div class="stat-line machine-CNC"><span>CNC</span><div class="metric-pair"><strong id="erp-cnc-value" class="done-value">0</strong><strong id="erp-cnc-error" class="error-value">0</strong></div></div>
+                    <div class="stat-line machine-InBat"><span class="machine-token"><span class="machine-icon machine-icon-InBat" aria-hidden="true"></span><span>InBat</span></span><div class="metric-pair"><strong id="erp-inbat-value" class="done-value">0</strong><strong id="erp-inbat-error" class="error-value">0</strong></div></div>
+                    <div class="stat-line machine-InDecal"><span class="machine-token"><span class="machine-icon machine-icon-InDecal" aria-hidden="true"></span><span>InDecal</span></span><div class="metric-pair"><strong id="erp-indecal-value" class="done-value">0</strong><strong id="erp-indecal-error" class="error-value">0</strong></div></div>
+                    <div class="stat-line machine-CNC"><span class="machine-token"><span class="machine-icon machine-icon-CNC" aria-hidden="true"></span><span>CNC</span></span><div class="metric-pair"><strong id="erp-cnc-value" class="done-value">0</strong><strong id="erp-cnc-error" class="error-value">0</strong></div></div>
                 </div>
             </section>
             <section class="sidebar-card">
@@ -2241,6 +2263,24 @@ HTML_TEMPLATE = """
             return MACHINE_COLORS[machine] || '#9aa4b2';
         }
 
+        function machineClass(machine) {
+            return ['InBat', 'InDecal', 'CNC'].includes(machine) ? machine : '';
+        }
+
+        function machineIcon(machine) {
+            const cls = machineClass(machine);
+            if (!cls) return '';
+            return `<span class="machine-icon machine-icon-${cls}" aria-hidden="true"></span>`;
+        }
+
+        function machineLabel(machine, label) {
+            return `<span class="machine-token">${machineIcon(machine)}<span>${escapeHtml(label || machine || '')}</span></span>`;
+        }
+
+        function accountIconMarkup() {
+            return '<svg class="account-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="10" r="3"></circle><path d="M7 19c1.1-2.2 2.8-3.3 5-3.3s3.9 1.1 5 3.3"></path></svg>';
+        }
+
         function setFlowMetric(metric) {
             flowMetric = metric === 'm2' ? 'm2' : 'count';
             document.getElementById('flowMetricCount')?.classList.toggle('active', flowMetric === 'count');
@@ -2408,7 +2448,7 @@ HTML_TEMPLATE = """
                     return `<details class="machine-card ${cardClass}" data-machine="${escapeHtml(m.machine)}">
                         <summary>
                             <div class="top">
-                                <div><div class="machine-name">${escapeHtml(m.machine)}</div>${hostLine}</div>
+                                <div><div class="machine-name">${machineLabel(m.machine, m.machine)}</div>${hostLine}</div>
                                 <span class="status-pill ${onlineClass}">${onlineText}</span>
                             </div>
                             <div class="machine-main">
@@ -3253,7 +3293,7 @@ HTML_TEMPLATE = """
 
         function checkAuthUI() {
             let pin = localStorage.getItem("admin_pin"); let btn = document.getElementById("authBtn");
-            btn.innerText = "⚙";
+            btn.innerHTML = accountIconMarkup();
             btn.title = pin ? "Đã đăng nhập quản trị - bấm để đăng xuất" : "Đăng nhập quản trị";
             btn.setAttribute("aria-label", btn.title);
             if (pin) { btn.classList.add("btn-logout"); } 
@@ -3308,7 +3348,7 @@ HTML_TEMPLATE = """
             }
             if(!file) return;
 
-            document.getElementById('dt-badge').innerText = file.machine; document.getElementById('dt-badge').className = "badge badge-" + file.machine;
+            document.getElementById('dt-badge').innerHTML = machineLabel(file.machine, file.machine); document.getElementById('dt-badge').className = "badge badge-" + file.machine;
             document.getElementById('dt-name').innerText = file.name; document.getElementById('dt-status').innerText = statusName;
             
             let actionText = (file.machine === "CNC") ? "Cắt" : "In";
@@ -3409,7 +3449,7 @@ HTML_TEMPLATE = """
                     </div>
                     ${progressBadge}
                     <div class="card-extra">
-                        <span class="badge badge-${file.machine}">${file.machine}</span>
+                        <span class="badge badge-${file.machine}">${machineLabel(file.machine, file.machine)}</span>
                         ${runBadge}
                         ${qtyBadge}
                         ${reasonBadge}
@@ -3528,7 +3568,7 @@ HTML_TEMPLATE = """
                 const name = escapeHtml(item.name || '');
                 return `
                     <div class="attention-item ${severity}" data-machine="${machine}" data-name="${name}" title="Bấm để xem chi tiết">
-                        <div class="attention-title">${escapeHtml(item.title)}</div>
+                        <div class="attention-title">${machineIcon(machine)}<span>${escapeHtml(item.title)}</span></div>
                         <div class="attention-meta">${machine} · ${name}</div>
                         <div class="attention-reason">${escapeHtml(item.reason || '')}</div>
                     </div>
@@ -3672,6 +3712,10 @@ def index():
 @app.route("/thumbs/<path:filename>")
 def serve_thumb(filename):
     return send_from_directory(THUMB_DIR, filename)
+
+@app.route("/assets/<path:filename>")
+def serve_asset(filename):
+    return send_from_directory(PUBLIC_DIR, filename)
 
 @app.route("/api/v2_status")
 def api_v2_status():

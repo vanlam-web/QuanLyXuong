@@ -1096,13 +1096,32 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertNotIn(">Chờ chạy", html)
         self.assertNotIn(">Vấn đề", html)
         self.assertIn('id="authBtn"', html)
-        self.assertIn('btn.innerText = "⚙"', html)
+        self.assertIn('class="top-navbar-brand"', html)
+        self.assertIn('/assets/brand-logo.png', html)
+        self.assertIn('function machineIcon(machine)', html)
+        self.assertIn('machine-icon machine-icon-InBat', html)
+        self.assertIn('machine-icon machine-icon-InDecal', html)
+        self.assertIn('machine-icon machine-icon-CNC', html)
+        self.assertIn('btn.innerHTML = accountIconMarkup()', html)
+        self.assertIn('class="account-icon"', html)
+        self.assertNotIn('btn.innerText = "⚙"', html)
         self.assertNotIn('btn.innerText = "Admin"', html)
         self.assertIn("function positionCardPreview(card)", html)
         self.assertIn("window.innerHeight - previewHeight - margin", html)
         self.assertIn("preview.style.maxHeight = maxPreviewHeight + 'px'", html)
         self.assertIn("grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))", html)
         self.assertIn("list.innerHTML = items.map(renderAttentionItem).join('')", html)
+
+    def test_dashboard_public_assets_are_served(self):
+        with Dashboard.app.test_client() as client:
+            logo_response = client.get("/assets/brand-logo.png")
+            icon_response = client.get("/assets/machine-icons/inbat.svg")
+
+        self.assertEqual(logo_response.status_code, 200)
+        self.assertEqual(icon_response.status_code, 200)
+        self.assertIn(b"<svg", icon_response.data[:320])
+        logo_response.close()
+        icon_response.close()
 
     def test_inbat_uses_green_machine_color(self):
         html = Dashboard.HTML_TEMPLATE

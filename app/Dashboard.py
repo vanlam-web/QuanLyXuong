@@ -1202,6 +1202,8 @@ HTML_TEMPLATE = """
         .controls, .summary-panel, .status-card, .erp-sum-card, .chart-box, .detail-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
         .controls { justify-content: flex-start; padding: 10px; }
         input[type="date"], select { background: #11161f; border-color: var(--line); border-radius: 8px; min-height: 34px; }
+        input[type="date"] { color-scheme: dark; }
+        input[type="date"]::-webkit-calendar-picker-indicator { background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23f3f6fb' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cpath d='M16 2v4M8 2v4M3 10h18'/%3E%3C/svg%3E") center / 14px 14px no-repeat; opacity: .95; cursor: pointer; }
         .summary-panel { padding: 10px; text-align: left; }
         .summary-title { color: var(--muted); }
         #view-v2 { display: flex !important; margin-bottom: 8px; }

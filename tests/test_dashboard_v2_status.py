@@ -860,6 +860,9 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertNotIn('id="erp-total-error-label"', html)
         self.assertNotIn("document.getElementById('erp-total-label')", html)
         self.assertNotIn("document.getElementById('erp-total-error-label')", html)
+        self.assertIn('input[type="date"]::-webkit-calendar-picker-indicator', html)
+        self.assertIn("data:image/svg+xml", html)
+        self.assertIn("%23f3f6fb", html)
 
     def test_card_preview_has_inline_admin_status_actions(self):
         html = Dashboard.HTML_TEMPLATE

@@ -2058,7 +2058,6 @@ HTML_TEMPLATE = """
             <section id="main-tab-production" class="main-tab-panel active">
                 <div class="compact-board">
                     <div class="column col-export queue-column">
-                        <h2>Hàng chờ <span class="count-badge" id="count-queue">0</span></h2>
                         <div class="stage-tabs" role="tablist" aria-label="Hàng chờ">
                             <button id="queue-tab-all" class="stage-tab active" type="button" data-stage-key="QUEUE" onclick="setProductionQueueTab('QUEUE')">Hàng chờ <span id="count-queue-all">0</span></button>
                             <button id="queue-tab-export" class="stage-tab" type="button" data-stage-key="EXPORTED" onclick="setProductionQueueTab('EXPORTED')">Xuất <span id="count-queue-export">0</span></button>
@@ -2067,9 +2066,8 @@ HTML_TEMPLATE = """
                         </div>
                         <div id="queue-list" class="list-container"></div>
                     </div>
-                    <div class="column col-done"><h2>In xong <span class="count-badge" id="count-done-compact">0</span></h2><div id="done-compact-list" class="list-container"></div></div>
+                    <div class="column col-done done-column" aria-label="In xong"><div id="done-compact-list" class="list-container"></div></div>
                     <div class="column col-cancel problem-column">
-                        <h2>Lỗi / thao tác <span class="count-badge" id="count-problem">0</span></h2>
                         <div class="stage-tabs problem-tabs" role="tablist" aria-label="Lỗi và thao tác">
                             <button id="problem-tab-all" class="stage-tab active" type="button" data-stage-key="PROBLEM" onclick="setProductionProblemTab('PROBLEM')">Lỗi / thao tác <span id="count-problem-all">0</span></button>
                             <button id="problem-tab-removed" class="stage-tab" type="button" data-stage-key="REMOVED" onclick="setProductionProblemTab('REMOVED')">Hủy <span id="count-problem-removed">0</span></button>

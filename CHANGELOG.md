@@ -15,6 +15,7 @@ Tat ca thay doi quan trong cua he thong Quan Ly Xuong se ghi o day.
 - Cap nhat man hinh `San xuat`:
   - Cot `Hang cho` co tab tong `Hang cho` va tab con `Xuat/RIP/Dang chay`.
   - Cot `Loi / thao tac` co tab tong `Loi / thao tac` va tab con `Huy/Loi`, khong chia 2 khung tren duoi nua.
+  - Bo dong tieu de cot lap lai trong compact board de giam chieu cao.
 - Cap nhat Dashboard compact:
   - Sidebar thong ke hien `Tong | hoan thanh | loi` tren mot hang, so tong lon va tach mau hoan thanh/loi.
   - Moi may `InBat/InDecal/CNC` hien ca so hoan thanh va so loi theo metric dang chon (`So luong` hoac `m2`).

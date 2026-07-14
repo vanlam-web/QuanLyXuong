@@ -987,7 +987,7 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertNotIn(".compact-board.all-empty {\n            display: none;", html)
         self.assertIn(".compact-board.all-empty + .empty-state", html)
         self.assertNotIn('<h2>Hàng chờ', html)
-        self.assertNotIn('<h2>In xong', html)
+        self.assertIn('<h2>In xong', html)
         self.assertNotIn('<h2>Lỗi / thao tác', html)
         self.assertIn("Hàng chờ", html)
         self.assertIn("In xong", html)

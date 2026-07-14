@@ -282,7 +282,8 @@ m2_hong_uoc_tinh / (m2_hoan_thanh + m2_hong_uoc_tinh) * 100
    - Badge/count va thong ke van dung tong that, khong phu thuoc so the dang render.
    - Cot `Hang cho` trong dashboard compact hien tab tong `Hang cho`, kem tab con `Xuat/RIP/Dang chay`; header van la tong hang cho.
    - Cot `Loi / thao tac` hien tab tong `Loi / thao tac`, kem tab con `Huy/Loi`; header van la tong loi + thao tac, danh sach hien theo tab dang chon.
-   - Khong hien them dong tieu de cot `Hang cho`, `In xong`, `Loi / thao tac` trong compact board vi bi trung voi tab/count va ton chieu cao.
+   - Khong hien them dong tieu de cot `Hang cho` va `Loi / thao tac` trong compact board vi bi trung voi tab/count va ton chieu cao.
+   - Cot `In xong` khong co tab nen van giu tieu de rieng de nguoi dung nhin ro danh sach xong.
 9. Loading:
    - Doi bo loc phai co dau hieu dang tai.
    - Ket qua request cu bi bo qua neu co request moi hon, tranh nhay nguoc du lieu.

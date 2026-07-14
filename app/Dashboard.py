@@ -2081,7 +2081,10 @@ HTML_TEMPLATE = """
                         </div>
                         <div id="queue-list" class="list-container"></div>
                     </div>
-                    <div class="column col-done done-column" aria-label="In xong"><div id="done-compact-list" class="list-container"></div></div>
+                    <div class="column col-done done-column" aria-label="In xong">
+                        <h2>In xong <span class="count-badge" id="count-done-compact">0</span></h2>
+                        <div id="done-compact-list" class="list-container"></div>
+                    </div>
                     <div class="column col-cancel problem-column">
                         <div class="stage-tabs problem-tabs" role="tablist" aria-label="Lỗi và thao tác">
                             <button id="problem-tab-all" class="stage-tab active" type="button" data-stage-key="PROBLEM" onclick="setProductionProblemTab('PROBLEM')">Lỗi / thao tác <span id="count-problem-all">0</span></button>

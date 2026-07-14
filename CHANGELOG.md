@@ -13,8 +13,8 @@ Tat ca thay doi quan trong cua he thong Quan Ly Xuong se ghi o day.
   - Neu may khong tra `%` that va chua co mau DONE tuong tu, Dashboard uoc tinh bang `line_count`.
   - Nhan luon ghi `ước tính` de phan biet voi `%` that tu may.
 - Cap nhat man hinh `San xuat`:
-  - Cot `Hang cho` co tab `Xuat/RIP/Dang chay` de xem rieng tung trang thai.
-  - Cot `Loi / thao tac` doi thanh tab `Huy/Loi`, khong chia 2 khung tren duoi nua.
+  - Cot `Hang cho` co tab tong `Hang cho` va tab con `Xuat/RIP/Dang chay`.
+  - Cot `Loi / thao tac` co tab tong `Loi / thao tac` va tab con `Huy/Loi`, khong chia 2 khung tren duoi nua.
 - Cap nhat Dashboard compact:
   - Sidebar thong ke hien `Tong | hoan thanh | loi` tren mot hang, so tong lon va tach mau hoan thanh/loi.
   - Moi may `InBat/InDecal/CNC` hien ca so hoan thanh va so loi theo metric dang chon (`So luong` hoac `m2`).

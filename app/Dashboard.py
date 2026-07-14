@@ -1447,13 +1447,13 @@ HTML_TEMPLATE = """
         .compact-board .column { min-width: 0; min-height: 0; }
         .stage-tabs {
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 4px;
             padding: 0 var(--space-2) var(--space-2);
             flex-shrink: 0;
         }
         .problem-tabs {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns: repeat(3, minmax(0, 1fr));
         }
         .stage-tab {
             min-width: 0;
@@ -2060,7 +2060,8 @@ HTML_TEMPLATE = """
                     <div class="column col-export queue-column">
                         <h2>Hàng chờ <span class="count-badge" id="count-queue">0</span></h2>
                         <div class="stage-tabs" role="tablist" aria-label="Hàng chờ">
-                            <button id="queue-tab-export" class="stage-tab active" type="button" data-stage-key="EXPORTED" onclick="setProductionQueueTab('EXPORTED')">Xuất <span id="count-queue-export">0</span></button>
+                            <button id="queue-tab-all" class="stage-tab active" type="button" data-stage-key="QUEUE" onclick="setProductionQueueTab('QUEUE')">Hàng chờ <span id="count-queue-all">0</span></button>
+                            <button id="queue-tab-export" class="stage-tab" type="button" data-stage-key="EXPORTED" onclick="setProductionQueueTab('EXPORTED')">Xuất <span id="count-queue-export">0</span></button>
                             <button id="queue-tab-rip" class="stage-tab" type="button" data-stage-key="RIP" onclick="setProductionQueueTab('RIP')">RIP <span id="count-queue-rip">0</span></button>
                             <button id="queue-tab-running" class="stage-tab" type="button" data-stage-key="RUNNING" onclick="setProductionQueueTab('RUNNING')">Đang chạy <span id="count-queue-running">0</span></button>
                         </div>
@@ -2070,7 +2071,8 @@ HTML_TEMPLATE = """
                     <div class="column col-cancel problem-column">
                         <h2>Lỗi / thao tác <span class="count-badge" id="count-problem">0</span></h2>
                         <div class="stage-tabs problem-tabs" role="tablist" aria-label="Lỗi và thao tác">
-                            <button id="problem-tab-removed" class="stage-tab active" type="button" data-stage-key="REMOVED" onclick="setProductionProblemTab('REMOVED')">Hủy <span id="count-problem-removed">0</span></button>
+                            <button id="problem-tab-all" class="stage-tab active" type="button" data-stage-key="PROBLEM" onclick="setProductionProblemTab('PROBLEM')">Lỗi / thao tác <span id="count-problem-all">0</span></button>
+                            <button id="problem-tab-removed" class="stage-tab" type="button" data-stage-key="REMOVED" onclick="setProductionProblemTab('REMOVED')">Hủy <span id="count-problem-removed">0</span></button>
                             <button id="problem-tab-canceled" class="stage-tab" type="button" data-stage-key="CANCELED" onclick="setProductionProblemTab('CANCELED')">Lỗi <span id="count-problem-canceled">0</span></button>
                         </div>
                         <div id="problem-list" class="list-container"></div>
@@ -2946,8 +2948,8 @@ HTML_TEMPLATE = """
 
         // ================= BOARD LOGIC =================
         let allData = { EXPORTED: [], RIP: [], RUNNING: [], DONE: [], CANCELED: [], REMOVED: [] };
-        let productionQueueTab = 'EXPORTED';
-        let productionProblemTab = 'REMOVED';
+        let productionQueueTab = 'QUEUE';
+        let productionProblemTab = 'PROBLEM';
         let previewPinned = false;
         let previewHoverCard = null;
         let currentPreviewFile = null;
@@ -3433,6 +3435,12 @@ HTML_TEMPLATE = """
             });
         }
 
+        function loadedProductionCount(key) {
+            if (key === 'QUEUE') return (allData.EXPORTED || []).length + (allData.RIP || []).length + (allData.RUNNING || []).length;
+            if (key === 'PROBLEM') return (allData.CANCELED || []).length + (allData.REMOVED || []).length;
+            return (allData[key] || []).length;
+        }
+
         function attachBoardScrollLoaders() {
             const ids = ['queue-list', 'done-compact-list', 'problem-list'];
             ids.forEach(id => {
@@ -3444,9 +3452,9 @@ HTML_TEMPLATE = """
                     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
                     if (!nearBottom) return;
                     const hasMore =
-                        (id === 'queue-list' && (allData[productionQueueTab] || []).length < boardCount(productionQueueTab)) ||
+                        (id === 'queue-list' && loadedProductionCount(productionQueueTab) < boardCount(productionQueueTab)) ||
                         (id === 'done-compact-list' && allData.DONE.length < boardCount('DONE')) ||
-                        (id === 'problem-list' && (allData[productionProblemTab] || []).length < boardCount(productionProblemTab));
+                        (id === 'problem-list' && loadedProductionCount(productionProblemTab) < boardCount(productionProblemTab));
                     if (!hasMore) return;
                     loadMoreBoard();
                 });
@@ -3529,18 +3537,22 @@ HTML_TEMPLATE = """
                 renderAttention(filter);
 
                 const queueByStage = {
+                    QUEUE: fExport.map(f => ({...f, stage_label: 'Xuất'}))
+                        .concat(fRip.map(f => ({...f, stage_label: 'RIP'})))
+                        .concat(fRun.map(f => ({...f, stage_label: 'Đang chạy'}))),
                     EXPORTED: fExport.map(f => ({...f, stage_label: 'Xuất'})),
                     RIP: fRip.map(f => ({...f, stage_label: 'RIP'})),
                     RUNNING: fRun.map(f => ({...f, stage_label: 'Đang chạy'})),
                 };
-                const queueItems = (queueByStage[productionQueueTab] || queueByStage.EXPORTED).sort(sortFn);
+                const queueItems = (queueByStage[productionQueueTab] || queueByStage.QUEUE).sort(sortFn);
                 const trueProblemItems = fCancel.map(f => ({...f, stage_label: 'Lỗi'})).sort(sortFn);
                 const removedProblemItems = fRemoved.map(f => ({...f, stage_label: 'Xóa'})).sort(sortFn);
                 const problemByStage = {
+                    PROBLEM: trueProblemItems.concat(removedProblemItems).sort(sortFn),
                     CANCELED: trueProblemItems,
                     REMOVED: removedProblemItems,
                 };
-                const problemItems = (problemByStage[productionProblemTab] || problemByStage.REMOVED).sort(sortFn);
+                const problemItems = (problemByStage[productionProblemTab] || problemByStage.PROBLEM).sort(sortFn);
                 const problemTotal = boardCount('PROBLEM', trueProblemItems.length + removedProblemItems.length);
                 document.getElementById('queue-list').innerHTML = renderCardList(queueItems, boardCount(productionQueueTab, queueItems.length));
                 document.getElementById('done-compact-list').innerHTML = renderCardList(fDone, boardCount('DONE', fDone.length));
@@ -3577,11 +3589,13 @@ HTML_TEMPLATE = """
                     ['count-cancel', boardCount('CANCELED', fCancel.length)],
                     ['count-removed', boardCount('REMOVED', fRemoved.length)],
                     ['count-queue', boardCount('QUEUE', fExport.length + fRip.length + fRun.length)],
+                    ['count-queue-all', boardCount('QUEUE', fExport.length + fRip.length + fRun.length)],
                     ['count-queue-export', boardCount('EXPORTED', fExport.length)],
                     ['count-queue-rip', boardCount('RIP', fRip.length)],
                     ['count-queue-running', boardCount('RUNNING', fRun.length)],
                     ['count-done-compact', boardCount('DONE', fDone.length)],
                     ['count-problem', problemTotal],
+                    ['count-problem-all', problemTotal],
                     ['count-problem-canceled', boardCount('CANCELED', trueProblemItems.length)],
                     ['count-problem-removed', boardCount('REMOVED', removedProblemItems.length)],
                 ];

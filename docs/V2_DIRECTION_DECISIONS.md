@@ -274,8 +274,8 @@ m2_hong_uoc_tinh / (m2_hoan_thanh + m2_hong_uoc_tinh) * 100
    - API `/api/data` ho tro `limit`.
    - Dashboard tai 20 the dau, cuon/bam de tai tiep.
    - Badge/count va thong ke van dung tong that, khong phu thuoc so the dang render.
-   - Cot `Hang cho` trong dashboard compact hien tab `Xuat/RIP/Dang chay`; header van la tong hang cho.
-   - Cot `Loi / thao tac` hien tab `Huy/Loi`; header van la tong loi + thao tac, danh sach hien theo tab dang chon.
+   - Cot `Hang cho` trong dashboard compact hien tab tong `Hang cho`, kem tab con `Xuat/RIP/Dang chay`; header van la tong hang cho.
+   - Cot `Loi / thao tac` hien tab tong `Loi / thao tac`, kem tab con `Huy/Loi`; header van la tong loi + thao tac, danh sach hien theo tab dang chon.
 9. Loading:
    - Doi bo loc phai co dau hieu dang tai.
    - Ket qua request cu bi bo qua neu co request moi hon, tranh nhay nguoc du lieu.

@@ -5,7 +5,12 @@ __pycache__/
 
 # PyInstaller/build outputs
 build/
+build-dashboard-hotfix-spec/
 dist/
+dist-new/
+releases/
+backups/
+support-bundles/
 *.pkg
 *.toc
 *.pyz
@@ -36,4 +41,3 @@ KhoiDongBot.bat
 # Browser/user profiles
 Bot_Profile/
 Data_Auto_CRM/
-

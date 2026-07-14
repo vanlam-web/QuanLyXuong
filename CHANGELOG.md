@@ -1,0 +1,52 @@
+# Changelog
+
+Tat ca thay doi quan trong cua he thong Quan Ly Xuong se ghi o day.
+
+## Unreleased
+
+- Cap nhat Dashboard compact:
+  - Sidebar thong ke hien `Tong | hoan thanh | loi` tren mot hang, so tong lon va tach mau hoan thanh/loi.
+  - Moi may `InBat/InDecal/CNC` hien ca so hoan thanh va so loi theo metric dang chon (`So luong` hoac `m2`).
+  - Bo dong ti le loi m2 rieng trong sidebar vi da co loi tong va loi tung may.
+  - Danh sach san xuat load 20 the dau, cuon/bam de tai tiep nhung tong thong ke van tinh du.
+  - Khi load cham co trang thai dang tai/spinner, tranh hieu nham dashboard bi do.
+  - Bao cao khach hang cho bam cot top 10 de loc bieu do don hang theo dung khach da chon.
+  - Tab He thong gop log/he thong, cac nguon nhu Outbox, Phien ban, Ghi chu, server/dashboard/machine/qcvl_bridge xep thanh mot hang chon nguon.
+- Deploy gan nhat chi restart Dashboard, khong restart server/client may san xuat.
+- Them master plan nang cap he thong theo huong production/staging/release/rollback.
+- Them rollback/publish scripts cho `dist`.
+- Them backup DB bang SQLite online backup API.
+- Them restore DB tu backup, co backup nguoc `pre-restore-*`.
+- Them healthcheck script.
+- Them QCVL bridge dry-run doc SQLite cu.
+- Them `qlx_config.py` de tach cau hinh IP/path/port/NAS/OpenClaw/KiotViet ra env voi default cu.
+- Them requirements va script kiem tra moi truong Python.
+- Them admin console cho nguoi khong code.
+- Them quality gate gom Python compile, PowerShell syntax, config import va bridge smoke.
+- Them support bundle zip de gom log/healthcheck/git status cho AI chan doan.
+- Them preflight deploy gom quality gate, healthcheck, backup DB va support bundle.
+- Them scheduled backup task va cleanup backup cu.
+- Them unit test cho bridge QCVL va qlx_config, dua vao quality gate.
+- Them test bridge export JSONL va khong luu checkpoint khi chay sample.
+- Them build release script va smoke-test build 4 exe vao thu muc tam.
+- Smoke-test build V2 lai thanh cong vao `%TEMP%\qlx-v2-build-smoke-dist`.
+- Smoke-test build V2 co `bridge_qcvl.exe` thanh cong vao `%TEMP%\qlx-v2-bridge-build-smoke-dist`.
+- Them export JSONL payload mau cho QCVL bridge.
+- Them contract API/schema JSON cho `POST /api/v1/production-events`.
+- Them `docs\V2_DIRECTION_DECISIONS.md` de luu quyet dinh: V2 bo KiotViet/Zalo auto, chi day POS QCVL.
+- Cap nhat master plan va QCVL bridge plan theo huong chuan hoa V2 truoc, QCVL sau.
+- Them `docs\V2_IMPLEMENTATION_PLAN.md` va `docs\V2_RUNBOOK.md`.
+- Them V2 runtime flags: `QLX_RUNTIME_MODE`, `QLX_ENABLE_AUTO_CRM`, `QLX_ENABLE_SERVER_ZALO`.
+- `server.py` co the tat wake Auto_CRM va Zalo auto bang env khi chay V2.
+- Them `scripts\Test-V2Readiness.ps1` va menu admin de kiem tra san sang V2.
+- Them `scripts\Set-V2Mode.ps1` va menu admin de bat V2/ve legacy co xac nhan.
+- Them `scripts\Invoke-V2Preflight.ps1` de gom quality gate, healthcheck, readiness va payload sample truoc publish V2.
+- Them `scripts\Start-V2Runtime.ps1` va `KhoiDongV2Runtime.bat` de chay server/dashboard theo V2, khong start Auto_CRM.
+- Healthcheck them `-Role Server|Machine|All` va khong bat buoc Auto_CRM/OpenClaw khi V2 tat auto.
+- Build/release them `bridge_qcvl.exe` lam artifact V2 chinh thuc.
+- Publish/rollback copy toan bo file trong release dist de khong sot bridge/manifest.
+- Them kiem tra JSON schema vao quality gate.
+- Viet lai README thanh trang van hanh nhanh cho nguoi khong code.
+- Sua docs admin console bi lech so menu.
+- Sua `server.py` thieu import `re`.
+- Sua Dashboard fail-closed khi chua cau hinh `DASHBOARD_ADMIN_PIN`.

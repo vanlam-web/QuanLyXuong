@@ -1,0 +1,52 @@
+﻿[
+    {
+        "source":  "Z:\\Tools\\Auto_CRM.py",
+        "target":  "Z:\\Tools\\app\\Auto_CRM.py",
+        "moved_at":  "2026-07-10T15:00:05"
+    },
+    {
+        "source":  "Z:\\Tools\\Dashboard.py",
+        "target":  "Z:\\Tools\\app\\Dashboard.py",
+        "moved_at":  "2026-07-10T15:00:05"
+    },
+    {
+        "source":  "Z:\\Tools\\QuanLyXuong.py",
+        "target":  "Z:\\Tools\\app\\QuanLyXuong.py",
+        "moved_at":  "2026-07-10T15:00:05"
+    },
+    {
+        "source":  "Z:\\Tools\\server.py",
+        "target":  "Z:\\Tools\\app\\server.py",
+        "moved_at":  "2026-07-10T15:00:05"
+    },
+    {
+        "source":  "Z:\\Tools\\bridge_qcvl.py",
+        "target":  "Z:\\Tools\\app\\bridge_qcvl.py",
+        "moved_at":  "2026-07-10T15:00:05"
+    },
+    {
+        "source":  "Z:\\Tools\\cnc_legacy_bridge.py",
+        "target":  "Z:\\Tools\\app\\cnc_legacy_bridge.py",
+        "moved_at":  "2026-07-10T15:00:05"
+    },
+    {
+        "source":  "Z:\\Tools\\qlx_config.py",
+        "target":  "Z:\\Tools\\app\\qlx_config.py",
+        "moved_at":  "2026-07-10T15:00:05"
+    },
+    {
+        "source":  "Z:\\Tools\\qlx_outbox.py",
+        "target":  "Z:\\Tools\\app\\qlx_outbox.py",
+        "moved_at":  "2026-07-10T15:00:05"
+    },
+    {
+        "source":  "Z:\\Tools\\qlx_workstation_logic.py",
+        "target":  "Z:\\Tools\\app\\qlx_workstation_logic.py",
+        "moved_at":  "2026-07-10T15:00:05"
+    },
+    {
+        "source":  "Z:\\Tools\\tap_preview.py",
+        "target":  "Z:\\Tools\\app\\tap_preview.py",
+        "moved_at":  "2026-07-10T15:00:05"
+    }
+]

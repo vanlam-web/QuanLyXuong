@@ -1,0 +1,32 @@
+﻿[
+    {
+        "source":  "Z:\\Tools\\__pycache__",
+        "target":  "Z:\\Tools\\archive\\old-builds\\__pycache__.20260710_145536",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:55:36"
+    },
+    {
+        "source":  "Z:\\Tools\\KhoiDongAdminConsole.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\KhoiDongAdminConsole.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:55:36"
+    },
+    {
+        "source":  "Z:\\Tools\\KhoiDongBot.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\KhoiDongBot.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:55:36"
+    },
+    {
+        "source":  "Z:\\Tools\\KhoiDongBot.example.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\KhoiDongBot.example.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:55:36"
+    },
+    {
+        "source":  "Z:\\Tools\\KhoiDongV2Runtime.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\KhoiDongV2Runtime.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:55:36"
+    }
+]

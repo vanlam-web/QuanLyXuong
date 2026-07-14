@@ -1,0 +1,44 @@
+﻿[
+    {
+        "source":  "Z:\\Tools\\__pycache__",
+        "target":  "Z:\\Tools\\archive\\old-builds\\__pycache__.20260710_145731",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:57:31"
+    },
+    {
+        "source":  "Z:\\Tools\\05062026-1632",
+        "target":  "Z:\\Tools\\archive\\v1-backup\\05062026-1632",
+        "reason":  "old V1 backup folder moved out of root",
+        "moved_at":  "2026-07-10T14:57:31"
+    },
+    {
+        "source":  "Z:\\Tools\\Auto_CRM.spec",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\Auto_CRM.spec",
+        "reason":  "old root spec; build-specs contains current specs",
+        "moved_at":  "2026-07-10T14:57:31"
+    },
+    {
+        "source":  "Z:\\Tools\\BAO_CAO_LUONG_HE_THONG.md",
+        "target":  "Z:\\Tools\\archive\\old-root-docs\\BAO_CAO_LUONG_HE_THONG.md",
+        "reason":  "legacy root document moved out of root",
+        "moved_at":  "2026-07-10T14:57:31"
+    },
+    {
+        "source":  "Z:\\Tools\\HD.txt",
+        "target":  "Z:\\Tools\\archive\\old-root-docs\\HD.txt",
+        "reason":  "legacy root document moved out of root",
+        "moved_at":  "2026-07-10T14:57:31"
+    },
+    {
+        "source":  "Z:\\Tools\\KE_HOACH_NANG_CAP.md",
+        "target":  "Z:\\Tools\\archive\\old-root-docs\\KE_HOACH_NANG_CAP.md",
+        "reason":  "legacy root document moved out of root",
+        "moved_at":  "2026-07-10T14:57:31"
+    },
+    {
+        "source":  "Z:\\Tools\\server.spec",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\server.spec",
+        "reason":  "old root spec; build-specs contains current specs",
+        "moved_at":  "2026-07-10T14:57:31"
+    }
+]

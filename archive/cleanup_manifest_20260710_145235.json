@@ -1,0 +1,176 @@
+﻿[
+    {
+        "source":  "Z:\\Tools\\__pycache__",
+        "target":  "Z:\\Tools\\archive\\old-builds\\__pycache__",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-client-only",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-client-only",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-cnc-legacy-bridge",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-cnc-legacy-bridge",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-cnc-win7-py36-x86",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-cnc-win7-py36-x86",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-cnc-win7-py36-x86-console",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-cnc-win7-py36-x86-console",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-cnc-win7-x86",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-cnc-win7-x86",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-cnc-win7-x86-console",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-cnc-win7-x86-console",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-dashboard-new",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-dashboard-new",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-dashboard-only",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-dashboard-only",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-dashboard-refresh",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-dashboard-refresh",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-new",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-new",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-server-refresh",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-server-refresh",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-specs-cnc-win7-py36-x86",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-specs-cnc-win7-py36-x86",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\build-specs-cnc-win7-x86",
+        "target":  "Z:\\Tools\\archive\\old-builds\\build-specs-cnc-win7-x86",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\CapNhatDashboardPreviewCNC.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\CapNhatDashboardPreviewCNC.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\dist-cnc-win7-py36-x86",
+        "target":  "Z:\\Tools\\archive\\old-builds\\dist-cnc-win7-py36-x86",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\dist-cnc-win7-x86",
+        "target":  "Z:\\Tools\\archive\\old-builds\\dist-cnc-win7-x86",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\dist-dashboard-new",
+        "target":  "Z:\\Tools\\archive\\old-builds\\dist-dashboard-new",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\dist-new",
+        "target":  "Z:\\Tools\\archive\\old-builds\\dist-new",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\dist-new-client",
+        "target":  "Z:\\Tools\\archive\\old-builds\\dist-new-client",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\dist-new-dashboard",
+        "target":  "Z:\\Tools\\archive\\old-builds\\dist-new-dashboard",
+        "reason":  "temporary build/output folder",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\KhoiDongBot_CNC_Win7_py36.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\KhoiDongBot_CNC_Win7_py36.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\KhoiDongCNCWin7_py36_x86.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\KhoiDongCNCWin7_py36_x86.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\KhoiDongCNCWin7_x86.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\KhoiDongCNCWin7_x86.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\RestartQuanLyXuongService.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\RestartQuanLyXuongService.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\TestCNCWin7_py36_Local_console.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\TestCNCWin7_py36_Local_console.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\TestCNCWin7_py36_x86_console.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\TestCNCWin7_py36_x86_console.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:52:35"
+    },
+    {
+        "source":  "Z:\\Tools\\TestCNCWin7_x86_console.bat",
+        "target":  "Z:\\Tools\\archive\\old-root-files\\TestCNCWin7_x86_console.bat",
+        "reason":  "manual helper script moved out of root",
+        "moved_at":  "2026-07-10T14:52:35"
+    }
+]

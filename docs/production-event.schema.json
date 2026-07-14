@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QuanLyXuongProductionEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "legacy_event_hash",
+    "source",
+    "machine",
+    "raw_file_name",
+    "raw_file_path",
+    "event_type",
+    "status",
+    "received_at",
+    "updated_at",
+    "run_count",
+    "parse_status",
+    "parsed",
+    "legacy"
+  ],
+  "properties": {
+    "legacy_event_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "source": {
+      "type": "string",
+      "const": "QuanLyXuong"
+    },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["legacy_name", "code", "name", "machine_type"],
+      "properties": {
+        "legacy_name": { "type": "string", "enum": ["InBat", "InDecal", "CNC"] },
+        "code": { "type": "string", "enum": ["INBAT", "INDECAL", "CNC"] },
+        "name": { "type": "string", "minLength": 1 },
+        "machine_type": { "type": "string", "enum": ["banner_print", "decal_print", "cnc_cut"] }
+      }
+    },
+    "raw_file_name": { "type": "string", "minLength": 1 },
+    "raw_file_path": { "type": "string" },
+    "event_type": {
+      "type": "string",
+      "enum": ["EXPORTED", "RIP", "PRINTING", "CUTTING", "DONE", "DELETED"]
+    },
+    "job_type": { "type": "string" },
+    "status": { "type": "string", "minLength": 1 },
+    "received_at": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "minLength": 1 },
+    "run_count": { "type": "integer", "minimum": 1 },
+    "parse_status": { "type": "string", "enum": ["pending", "ok", "error"] },
+    "parse_error": { "type": ["string", "null"] },
+    "parsed": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["quantity", "raw_name"],
+      "properties": {
+        "customer_code": { "type": ["string", "null"] },
+        "width_m": { "type": ["number", "null"] },
+        "height_m": { "type": ["number", "null"] },
+        "quantity": { "type": "integer", "minimum": 1 },
+        "raw_name": { "type": "string" }
+      }
+    },
+    "legacy": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["file_hash", "history"],
+      "properties": {
+        "file_hash": { "type": ["string", "null"] },
+        "history": { "type": "array" }
+      }
+    }
+  }
+}

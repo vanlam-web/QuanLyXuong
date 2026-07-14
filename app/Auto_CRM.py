@@ -14,13 +14,10 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
+from qlx_config import AUTO_CRM_HOST, AUTO_CRM_PORT, BASE_DATA_CRM, DB_DIR, ENABLE_AUTO_CRM, KIOT_URL, NAS_CRM_EXE_PATH, OPENCLAW_PATH, RUNTIME_MODE, SERVER_BROADCAST_URL
 
-DB_DIR = r"C:\QuanLyXuong\Data"
 MACHINES = ["InBat", "InDecal"]
-OPENCLAW_PATH = r"C:\Users\Admin\AppData\Roaming\npm\openclaw.cmd"
-NAS_CRM_EXE_PATH = r"\\192.168.1.188\AI\Tools\dist\Auto_CRM.exe"
 
-KIOT_URL = "https://quangcaoinvanlam.kiotviet.vn/" 
 USERNAME = os.getenv("KIOT_USERNAME", "Bot")
 PASSWORD = os.getenv("KIOT_PASSWORD", "")
 ZALO_GROUP_ID = os.getenv("AUTO_CRM_ZALO_GROUP_ID", "")
@@ -28,7 +25,6 @@ ZALO_GROUP_ID = os.getenv("AUTO_CRM_ZALO_GROUP_ID", "")
 # =========================================
 # CỐ ĐỊNH 100% ĐƯỜNG DẪN VỀ Ổ C BẤT CHẤP VỊ TRÍ FILE CHẠY
 # =========================================
-BASE_DATA_CRM = r"C:\QuanLyXuong\Data_Auto_CRM"
 os.makedirs(BASE_DATA_CRM, exist_ok=True)
 
 FILE_VIP = os.path.join(BASE_DATA_CRM, "DanhBa_VIP.json")
@@ -50,7 +46,7 @@ def wake_up_crm():
     return {"status": "Bot CRM Đã Tỉnh Giấc!"}
 
 def start_webhook_listener():
-    uvicorn.run(crm_webhook_app, host="127.0.0.1", port=8001, log_level="critical")
+    uvicorn.run(crm_webhook_app, host=AUTO_CRM_HOST, port=AUTO_CRM_PORT, log_level="critical")
 
 def auto_update_watcher():
     start_mtime = 0
@@ -496,7 +492,7 @@ def main():
                                     c_up.execute("PRAGMA journal_mode=WAL;") 
                                     c_up.execute("UPDATE files SET zalo_sent = 1 WHERE file_hash = ?", (f_hash,))
                                     c_up.commit(); c_up.close()
-                                    try: requests.get("http://127.0.0.1:8000/api/broadcast", timeout=1)
+                                    try: requests.get(SERVER_BROADCAST_URL, timeout=1)
                                     except: pass
                                 except Exception as e:
                                     print_log(f"⚠️ Lỗi cập nhật icon Zalo: {e}")
@@ -531,7 +527,7 @@ def main():
                                 c_up.execute("PRAGMA journal_mode=WAL;") 
                                 c_up.execute("UPDATE files SET zalo_sent = 1 WHERE file_hash = ?", (f_hash,))
                                 c_up.commit(); c_up.close()
-                                try: requests.get("http://127.0.0.1:8000/api/broadcast", timeout=1)
+                                try: requests.get(SERVER_BROADCAST_URL, timeout=1)
                                 except: pass
                             except Exception as e:
                                 print_log(f"⚠️ Lỗi cập nhật icon Zalo: {e}")
@@ -542,4 +538,8 @@ def main():
             wake_up_event.wait(POLL); wake_up_event.clear() 
         except Exception as e: print_log(f"Lỗi: {e}"); time.sleep(5)
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    if RUNTIME_MODE == "v2" or not ENABLE_AUTO_CRM:
+        print_log("V2 mode: Auto_CRM disabled, exit.")
+        sys.exit(0)
+    main()

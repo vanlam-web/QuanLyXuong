@@ -61,7 +61,14 @@ def parse_area_python(filename):
     m2 = 0.0
     match = re.search(r'(\d{2,4})\s*[xX]\s*(\d{2,4})', str(filename).lower())
     if match:
-        try: m2 = (int(match.group(1)) * int(match.group(2))) / 10000.0
+        try:
+            width = int(match.group(1))
+            height = int(match.group(2))
+            m2 = (width * height) / 10000.0
+            if m2 > 50 and (width >= 1000 or height >= 1000):
+                width_cm = width / 10.0 if width >= 1000 else width
+                height_cm = height / 10.0 if height >= 1000 else height
+                m2 = (width_cm * height_cm) / 10000.0
         except: pass
     return m2
 

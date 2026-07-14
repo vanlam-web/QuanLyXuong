@@ -591,6 +591,10 @@ class DashboardV2StatusTests(unittest.TestCase):
 
         self.assertEqual(rate, 0)
 
+    def test_parse_area_handles_missing_decimal_outlier_names(self):
+        self.assertAlmostEqual(Dashboard.parse_area_python("quochoang_366x2544.prt"), 9.31104)
+        self.assertAlmostEqual(Dashboard.parse_area_python("NTDQq_800x310.prt"), 24.8)
+
     def test_stats_returns_machine_flow_count_and_m2(self):
         self.make_machine_db("InBat")
         self.make_machine_db("InDecal")

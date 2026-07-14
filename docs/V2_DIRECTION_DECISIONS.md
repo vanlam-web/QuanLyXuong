@@ -132,6 +132,12 @@ m2_hong_uoc_tinh / (m2_hoan_thanh + m2_hong_uoc_tinh) * 100
    - Nguong fallback hien tai: thoi gian du kien = `max(180 giay, line_count / 9)`.
    - Label bat buoc co chu `ước tính`, vi day khong phai `%` that tu may.
    - Vi du `f3_120x75.tap` co `line_count=3339`; sau 186 giay tu moc `CUTTING`, Dashboard hien khoang `50% ước tính`.
+9. Rieng job may in dang chay:
+   - Neu may khong tra `%` that va chua co mau DONE phu hop, Dashboard duoc uoc tinh bang dien tich m2.
+   - Nguon m2 uu tien `machine_meta_json.area_m2`; neu khong co thi parse ten file.
+   - Nguong fallback hien tai: thoi gian du kien = `max(300 giay, m2 * 90 giay)`.
+   - Label bat buoc co chu `ước tính`.
+   - Vi du `ttttp_300x250.prt` khong co meta m2 nhung ten file co `300x250` = `7.5 m2`; sau 78 giay tu moc `PRINTING`, Dashboard hien khoang `12% ước tính`.
 
 ### In lai va so luong dung
 

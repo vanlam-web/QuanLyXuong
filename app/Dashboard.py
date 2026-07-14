@@ -419,6 +419,13 @@ def estimate_tap_line_progress(elapsed_seconds, line_count):
     expected_seconds = max(180.0, lines / 9.0)
     return max(1, min(99, int(round(elapsed_seconds * 100 / expected_seconds))))
 
+def estimate_print_area_progress(elapsed_seconds, area_m2):
+    area = safe_float(area_m2)
+    if elapsed_seconds <= 0 or area <= 0:
+        return None
+    expected_seconds = max(300.0, area * 90.0)
+    return max(1, min(99, int(round(elapsed_seconds * 100 / expected_seconds))))
+
 def estimate_active_progress(file_name, history_data, completed_samples, machine_meta=None, now_dt=None):
     history = load_history(history_data)
     start_dt = active_start_time(history_data, "")
@@ -431,7 +438,7 @@ def estimate_active_progress(file_name, history_data, completed_samples, machine
 
     meta = machine_meta if isinstance(machine_meta, dict) else parse_machine_meta_json(machine_meta)
     active_lines = safe_float(meta.get("line_count"))
-    area = parse_area_python(file_name)
+    area = best_area_m2(file_name, meta)
     durations = []
     for sample in completed_samples or []:
         if not isinstance(sample, dict):
@@ -462,6 +469,14 @@ def estimate_active_progress(file_name, history_data, completed_samples, machine
                 return {
                     "progress_percent": percent,
                     "progress_source": "tap_line_fallback",
+                    "progress_label": f"Tiến độ: {percent}% ước tính",
+                }
+        if area > 0:
+            percent = estimate_print_area_progress(elapsed, area)
+            if percent is not None:
+                return {
+                    "progress_percent": percent,
+                    "progress_source": "print_area_fallback",
                     "progress_label": f"Tiến độ: {percent}% ước tính",
                 }
         return {"progress_percent": None, "progress_source": "unknown", "progress_label": ""}

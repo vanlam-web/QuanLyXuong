@@ -1548,6 +1548,28 @@ Da chot:
 - Fallback phai ghi `ước tính`, khong hien nhu so that.
 - Test neo: `f3_120x75.tap`, `line_count=3339`, sau 186 giay tu `CUTTING` -> `50% ước tính`.
 
+## Ghim loi job may in dang chay khong hien phan tram 2026-07-14
+
+Van de:
+
+- Card `ttttp_300x250.prt` dang `Dang chay` luc `08:57:52` nhung khong hien `%`.
+- Preview co anh, nhung `machine_meta_json` cua dong `.prt` chi co duong dan, khong co `progress_percent` va khong co `area_m2`.
+- Dong `.tif` goc lien quan co meta anh `7.5017 m2`, nhung dong `.prt` dang chay khong mang meta do.
+
+Nguyen nhan:
+
+- May in khong tra `%` that.
+- Dashboard chi uoc tinh theo sample DONE gan tuong duong, hoac fallback rieng TAP/CNC theo `line_count`.
+- `.prt/.prn/.tif` dang in khong co sample phu hop thi `progress_label` bi de rong.
+
+Da chot:
+
+- Neu co `%` that tu may, uu tien so that.
+- Neu khong co `%` that nhung co sample DONE tuong tu, uoc tinh theo sample.
+- Neu la file in co m2 tu meta hoac ten file, fallback uoc tinh theo m2.
+- Fallback phai ghi `ước tính`, khong hien nhu so that.
+- Test neo: `ttttp_300x250.prt`, `300x250 = 7.5 m2`, sau 78 giay tu `PRINTING` -> `12% ước tính`.
+
 ## Bao cao khach 1 moc du lieu khong thay bieu do 2026-07-13 19:45
 
 Van de:

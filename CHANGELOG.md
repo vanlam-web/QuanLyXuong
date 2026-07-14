@@ -12,6 +12,9 @@ Tat ca thay doi quan trong cua he thong Quan Ly Xuong se ghi o day.
 - Sua tien do CNC/TAP dang chay:
   - Neu may khong tra `%` that va chua co mau DONE tuong tu, Dashboard uoc tinh bang `line_count`.
   - Nhan luon ghi `ước tính` de phan biet voi `%` that tu may.
+- Sua tien do may in dang chay:
+  - Neu `.prt/.prn/.tif` dang in khong co `%` that va chua co sample DONE phu hop, Dashboard uoc tinh bang m2 tu meta hoac ten file.
+  - Neo test bang file that `ttttp_300x250.prt`.
 - Cap nhat man hinh `San xuat`:
   - Cot `Hang cho` co tab tong `Hang cho` va tab con `Xuat/RIP/Dang chay`.
   - Cot `Loi / thao tac` co tab tong `Loi / thao tac` va tab con `Huy/Loi`, khong chia 2 khung tren duoi nua.

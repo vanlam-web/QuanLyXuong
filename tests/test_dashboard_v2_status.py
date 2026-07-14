@@ -496,6 +496,19 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertEqual(progress["progress_percent"], 50)
         self.assertEqual(progress["progress_label"], "Tiến độ: 50% ước tính")
 
+    def test_estimate_active_progress_uses_print_area_without_done_samples(self):
+        progress = Dashboard.estimate_active_progress(
+            "ttttp_300x250.prt",
+            '[{"status":"PRINTING","time":"2026-07-14 08:57:52"}]',
+            [],
+            {"metadata_source": r"\\InBat\D\2026-07-13\New Folder\ttttp_300x250.prt"},
+            now_dt=Dashboard.datetime.strptime("2026-07-14 08:59:10", "%Y-%m-%d %H:%M:%S"),
+        )
+
+        self.assertEqual(progress["progress_source"], "print_area_fallback")
+        self.assertEqual(progress["progress_percent"], 12)
+        self.assertEqual(progress["progress_label"], "Tiến độ: 12% ước tính")
+
     def test_dedupe_visible_items_keeps_latest_duplicate_cancel(self):
         items = [
             {"machine": "InDecal", "name": "14~xpppp1_122x164.prn", "cancel_type": "production_cancel", "updated": "2026-07-13 15:38:33"},

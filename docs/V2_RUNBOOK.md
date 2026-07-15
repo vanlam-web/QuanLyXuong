@@ -204,9 +204,9 @@ Mo dashboard `http://<server-ip>:5000`.
 Tab chinh:
 
 - `San xuat`: theo doi file cho/chay/xong/loi. Danh sach chi render 20 the dau, cuon hoac bam dong `Con ... the cu hon` de tai tiep. Badge/count van la tong that.
-- `Cho xu ly`: cac canh bao can xem lai, vi du thieu tin hieu ket thuc, DONE qua nhanh, chua ro % hong.
+- `Cho xu ly`: cac canh bao can xem lai, vi du thieu tin hieu ket thuc, DONE qua nhanh, chua ro % hong. Tab nay nam cuoi thanh tab chinh de khong chen giua san xuat va bao cao.
 - `Bao cao`: top khach hang va bieu do theo thoi gian. Bam cot khach hang de loc rieng khach do. Nut `So luong/m2` doi ca bieu do, thong ke tong, loi va top khach.
-- `He thong`: gom he thong va log. Chon nguon tren mot hang: Outbox, Phien ban, Ghi chu, server, dashboard, machine, qcvl_bridge.
+- `He thong`: gom he thong va log. Chon nguon tren mot hang: Outbox, Phien ban, Ghi chu, server, dashboard, machine, qcvl_bridge. Log moi nhat nam tren cung trong khung xem log.
 
 Sidebar:
 
@@ -227,6 +227,7 @@ Tien do va ETA may dang chay:
 - Reload browser khong lam mat mau ETA gan nhat, vi dashboard luu tam trong `localStorage`.
 - InBat ETA dung mau pass tang dan giong InDecal; neu chua du 2 mau pass tang thi hien `dang tinh thoi gian`.
 - Dashboard tu poll `/api/data` moi 3 giay khi websocket dang bat, de `%`/ETA InBat, InDecal va CNC nhay ma khong can reload trang.
+- Panel chi tiet file loi/huy nam ben phai hoac ben trai thẻ duoc chon, giu phong cach giong card preview; man hinh hep thi panel tu co theo viewport de khong bi khuat.
 
 Gioi han hien tai:
 

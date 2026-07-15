@@ -4,6 +4,10 @@ Tat ca thay doi quan trong cua he thong Quan Ly Xuong se ghi o day.
 
 ## Unreleased
 
+- Dashboard compact:
+  - Dua tab `Chờ xử lý` ve cuoi thanh tab chinh.
+  - Panel chi tiet file loi/huy bam theo the da chon, tu canh ben phai/ben trai va thu gon theo man hinh.
+  - Log he thong hien dong moi nhat o tren cung trong viewer.
 - Cap nhat nhan dien Dashboard `:5000`:
   - Doi chu `Xuong V2` goc trai thanh logo QC dung chung voi POS.
   - Them icon rieng co mau cho `InBat`, `InDecal`, `CNC` tren sidebar, thong ke, badge card va danh sach chu y.

@@ -3156,13 +3156,16 @@ HTML_TEMPLATE = """
                         path: 'Audit rename, meta, RIP của máy InDecal',
                         body: renameAuditBody
                     },
-                    ...rawLogs.map(log => ({
-                        name: log.name,
-                        badge: log.error_count || 0,
-                        badgeClass: log.error_count ? 'pill-warn' : 'pill-ok',
-                        path: log.path || '',
-                        body: `<div class="log-tail">${escapeHtml((log.tail || []).join('\\n')) || 'Chưa có log.'}</div>`
-                    }))
+                    ...rawLogs.map(log => {
+                        const latestFirstLogTail = (log.tail || []).slice().reverse();
+                        return {
+                            name: log.name,
+                            badge: log.error_count || 0,
+                            badgeClass: log.error_count ? 'pill-warn' : 'pill-ok',
+                            path: log.path || '',
+                            body: `<div class="log-tail">${escapeHtml(latestFirstLogTail.join('\\n')) || 'Chưa có log.'}</div>`
+                        };
+                    })
                 ];
                 const selectedSystemName = window.selectedSystemName || '';
                 let selectedSystemIndex = systemItems.findIndex(item => item.name === selectedSystemName);
@@ -3211,7 +3214,7 @@ HTML_TEMPLATE = """
             document.getElementById('systemViewerPath').innerText = item.path || '';
             document.getElementById('systemViewerBody').innerHTML = item.body || '<div class="status-message">Chưa có dữ liệu.</div>';
             const tail = document.querySelector('#systemViewerBody .log-tail');
-            if (tail) tail.scrollTop = tail.scrollHeight;
+            if (tail) tail.scrollTop = 0;
         }
 
         function showVersionHistory(machine) {

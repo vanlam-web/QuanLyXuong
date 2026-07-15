@@ -1504,7 +1504,30 @@ HTML_TEMPLATE = """
         /* MODAL */
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.85); overflow-y: auto; padding: 20px 0; box-sizing: border-box;}
         .modal-content { background-color: #1e1e1e; margin: 0 auto; padding: 16px; border: 1px solid #444; border-radius: 10px; width: 340px; max-width: 92%; position: relative; margin-bottom: 30px;}
-        #detailModal .modal-content { width: 520px; max-width: 94%; }
+        #detailModal {
+            z-index: 2500;
+            background: transparent;
+            pointer-events: none;
+            overflow: visible;
+            padding: 0;
+        }
+        #detailModal .modal-content {
+            position: fixed;
+            right: 16px;
+            top: 94px;
+            width: 320px;
+            max-width: calc(100vw - 24px);
+            max-height: calc(100vh - 110px);
+            overflow-y: auto;
+            margin: 0;
+            padding: 8px;
+            background: #0b0d11;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            box-shadow: 0 16px 44px rgba(0,0,0,.55);
+            pointer-events: auto;
+            overscroll-behavior: contain;
+        }
         .close-x { position: absolute; right: 5px; top: 0px; font-size: 28px; color: #aaa; cursor: pointer; padding: 10px; line-height: 1; z-index: 10;}
         .close-x:hover { color: white; }
         .pin-input { width: 100%; box-sizing: border-box; padding: 10px; margin: 10px 0; background: #111; color: #00ffcc; border: 1px solid #555; border-radius: 8px; font-size: 18px; text-align: center; letter-spacing: 5px; font-weight: bold; outline: none;}
@@ -1534,6 +1557,34 @@ HTML_TEMPLATE = """
         .action-btn:disabled, .preview-action-btn:disabled { opacity: .55; cursor: wait; filter: grayscale(.25); }
         .btn-submit { background-color: #00ffcc; color: black; margin-top: 10px;} .btn-done { background-color: #33cc33; color: black;} .btn-cancel { background-color: #ff3333; color: white;} .btn-reset { background-color: #ff9900; color: black;} .btn-confirm-runs { background-color: #3b82f6; color: white; }
         #adminArea .action-btn + .action-btn { margin-top: 0; }
+        #detailModal .detail-header { margin-bottom: 8px; padding-bottom: 8px; border-bottom-color: #1f2937; }
+        #detailModal .detail-name { font-size: 12px; line-height: 1.35; color: var(--text); }
+        #detailModal .detail-subtitle { font-size: 11px; color: var(--muted); }
+        #detailModal .detail-summary-grid { display: grid; grid-template-columns: 1fr; gap: 5px; margin-bottom: 8px; }
+        #detailModal .detail-summary-card { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; align-items: baseline; min-height: 0; padding: 0 0 0 7px; background: transparent; border: 0; border-left: 2px solid #334155; border-radius: 0; }
+        #detailModal .detail-summary-card span { color: var(--muted); font-size: 11px; font-weight: 500; text-transform: none; margin: 0; }
+        #detailModal .detail-summary-card strong { color: var(--text); font-size: 11px; font-weight: 800; }
+        #detailModal .detail-body-grid { gap: 8px; }
+        #detailModal .detail-section { background: transparent; border: 0; border-radius: 0; }
+        #detailModal .detail-section-title { min-height: 0; padding: 0; margin-bottom: 6px; border: 0; background: transparent; color: var(--muted); font-size: 11px; text-transform: none; }
+        #detailModal .detail-section-body { padding: 0; }
+        #detailModal .timeline { border-left-color: #334155; }
+        #detailModal .tl-item { margin-bottom: 8px; }
+        #detailModal .tl-item::before { border-color: #0b0d11; }
+        #detailModal .tl-time { font-size: 10px; color: var(--muted); }
+        #detailModal .tl-desc { font-size: 11px; }
+        #detailModal #adminArea .detail-section-body { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; padding-top: 7px; border-top: 1px solid var(--line); }
+        #detailModal #adminArea .action-btn { min-height: 28px; padding: 5px 6px; font-size: 10px; border-radius: 6px; line-height: 1.2; }
+        #detailModal #confirmRunsBtn { grid-column: 1 / -1; }
+        @media screen and (max-width: 760px) {
+            #detailModal .modal-content {
+                left: 8px;
+                right: 8px;
+                top: 72px;
+                width: auto;
+                max-width: none;
+            }
+        }
 
         /* QUICK FILTER */
         .quick-select { background: #00ffcc !important; color: #000 !important; font-weight: bold; padding: 6px 12px !important; border-radius: 5px; cursor: pointer; border: 1px solid #00ffcc; outline: none; transition: 0.2s;}
@@ -2677,9 +2728,9 @@ HTML_TEMPLATE = """
                 <div id="adminArea" class="detail-section admin-section">
                     <div class="detail-section-title">Hành động xử lý</div>
                     <div class="detail-section-body compact">
-                        <button class="action-btn btn-done" onclick="forceUpdate('DONE')">Chuyển sang: Đã xong</button>
-                        <button class="action-btn btn-cancel" onclick="forceUpdate('DELETED')">Chuyển sang: Xóa/Hủy</button>
-                        <button class="action-btn btn-reset" onclick="forceUpdate('EXPORTED')">Chuyển sang: Xuất lại</button>
+                        <button class="action-btn btn-done" onclick="forceUpdate('DONE')">Đã xong</button>
+                        <button class="action-btn btn-cancel" onclick="forceUpdate('DELETED')">Xóa/Hủy</button>
+                        <button class="action-btn btn-reset" onclick="forceUpdate('EXPORTED')">Xuất lại</button>
                         <button id="confirmRunsBtn" class="action-btn btn-confirm-runs" style="display:none;" onclick="confirmRuns()">Xác nhận In x đúng</button>
                     </div>
                 </div>

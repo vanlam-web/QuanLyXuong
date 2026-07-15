@@ -289,8 +289,11 @@ class DashboardV2StatusTests(unittest.TestCase):
         conn.close()
 
         old_db_dir = Dashboard.DB_DIR
+        old_crm_dir = Dashboard.BASE_DATA_CRM
         Dashboard.DB_DIR = self.temp_dir.name
+        Dashboard.BASE_DATA_CRM = self.temp_dir.name
         self.addCleanup(lambda: setattr(Dashboard, "DB_DIR", old_db_dir))
+        self.addCleanup(lambda: setattr(Dashboard, "BASE_DATA_CRM", old_crm_dir))
 
         with mock.patch.object(
             Dashboard,
@@ -1305,6 +1308,40 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertEqual(detail["machine_flow"]["labels"], [str(i).zfill(2) for i in range(24)])
         self.assertEqual(detail["machine_flow"]["datasets"][0]["data"][9], 1)
         self.assertAlmostEqual(detail["machine_flow_m2"]["datasets"][0]["data"][9], 4.0)
+
+    def test_stats_strips_machine_sequence_prefix_from_customer_name(self):
+        self.make_machine_db("InDecal")
+
+        db_path = os.path.join(self.temp_dir.name, "InDecal.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            UPDATE files
+            SET file_name='8~TTP_120x325.prn',
+                updated_time='2026-07-11 09:10:00',
+                run_count=1
+            WHERE file_hash='hash-3'
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        old_db_dir = Dashboard.DB_DIR
+        old_crm_dir = Dashboard.BASE_DATA_CRM
+        Dashboard.DB_DIR = self.temp_dir.name
+        Dashboard.BASE_DATA_CRM = self.temp_dir.name
+        self.addCleanup(lambda: setattr(Dashboard, "DB_DIR", old_db_dir))
+        self.addCleanup(lambda: setattr(Dashboard, "BASE_DATA_CRM", old_crm_dir))
+
+        with Dashboard.app.test_client() as client:
+            response = client.get("/api/stats?start=2026-07-11&end=2026-07-11&machine=InDecal")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertIn("TTP", payload["customers"]["labels"])
+        self.assertIn("TTP", payload["customers_m2"]["labels"])
+        self.assertIn("TTP", payload["customer_details"])
+        self.assertNotIn("8~TTP", payload["customers"]["labels"])
 
     def test_stats_returns_cancel_totals_by_machine_for_sidebar(self):
         self.make_machine_db("InBat")

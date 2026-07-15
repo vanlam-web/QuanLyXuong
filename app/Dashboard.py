@@ -5453,7 +5453,8 @@ def api_stats():
     }
 
     def display_customer_name(file_name):
-        parts = str(file_name).split('_') if file_name else []
+        normalized_name = re.sub(r"^\s*\d+\s*~\s*", "", str(file_name or ""))
+        parts = normalized_name.split('_') if normalized_name else []
         if not parts:
             return "UNKNOWN"
         raw_cus = parts[0]

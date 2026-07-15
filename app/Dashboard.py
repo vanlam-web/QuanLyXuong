@@ -1513,7 +1513,7 @@ HTML_TEMPLATE = """
         }
         #detailModal .modal-content {
             position: fixed;
-            right: 16px;
+            left: 16px;
             top: 94px;
             width: 320px;
             max-width: calc(100vw - 24px);
@@ -3603,6 +3603,7 @@ HTML_TEMPLATE = """
         let previewPinned = false;
         let previewHoverCard = null;
         let currentPreviewFile = null;
+        let currentDetailAnchor = null;
         let previewLoadToken = 0;
         const previewImageCache = new Map();
         const RUNNING_ETA_STORAGE_KEY = 'qlx_running_eta_samples_v2';
@@ -4124,6 +4125,40 @@ HTML_TEMPLATE = """
             preview.style.top = topViewport + 'px';
         }
 
+        function positionDetailModal(anchorEl) {
+            const modal = document.getElementById('detailModal');
+            const content = modal?.querySelector('.modal-content');
+            if (!modal || !content) return;
+
+            const margin = 8;
+            const gap = 10;
+            const maxHeight = Math.max(160, window.innerHeight - (margin * 2));
+            content.style.maxHeight = maxHeight + 'px';
+
+            if (!anchorEl || !anchorEl.getBoundingClientRect) {
+                content.style.left = Math.max(margin, window.innerWidth - (content.offsetWidth || 320) - 16) + 'px';
+                content.style.top = Math.min(94, Math.max(margin, window.innerHeight - (content.offsetHeight || 260) - margin)) + 'px';
+                return;
+            }
+
+            const rect = anchorEl.getBoundingClientRect();
+            const modalWidth = content.offsetWidth || 320;
+            const showRight = rect.right + modalWidth + gap <= window.innerWidth - margin;
+            let leftViewport = showRight ? rect.right + gap : rect.left - modalWidth - gap;
+            const maxLeft = Math.max(margin, window.innerWidth - modalWidth - margin);
+            leftViewport = Math.min(Math.max(margin, leftViewport), maxLeft);
+
+            const modalHeight = Math.min(content.scrollHeight || content.offsetHeight || rect.height || 220, maxHeight);
+            let topViewport = rect.top;
+            if (topViewport + modalHeight > window.innerHeight - margin) {
+                topViewport = window.innerHeight - modalHeight - margin;
+            }
+            topViewport = Math.max(margin, topViewport);
+
+            content.style.left = leftViewport + 'px';
+            content.style.top = topViewport + 'px';
+        }
+
         function showCardPreview(card, src, title, meta, pin=false, options={}) {
             if (!src && !pin) return;
             const loadToken = ++previewLoadToken;
@@ -4259,7 +4294,7 @@ HTML_TEMPLATE = """
 
         document.getElementById("pin-input").addEventListener("keypress", function(e) { if (e.key === "Enter") submitLogin(); });
 
-        function closeModals() { document.getElementById('loginModal').style.display = 'none'; document.getElementById('detailModal').style.display = 'none'; document.getElementById('pin-input').value = ''; }
+        function closeModals() { document.getElementById('loginModal').style.display = 'none'; document.getElementById('detailModal').style.display = 'none'; document.getElementById('pin-input').value = ''; currentDetailAnchor = null; }
 
         function calculateDurationRaw(startStr, endStr) {
             let t1 = new Date(startStr); let t2 = new Date(endStr); let diffMs = t2 - t1;
@@ -4278,7 +4313,7 @@ HTML_TEMPLATE = """
             return m2;
         }
 
-        function openDetailModal(machine, realName) {
+        function openDetailModal(machine, realName, anchorEl=null) {
             let file = null; let statusName = "Chưa rõ";
             for(let k in allData) {
                 if(k === "ATTENTION" || k === "COUNTS") continue;
@@ -4334,7 +4369,9 @@ HTML_TEMPLATE = """
             }
             document.getElementById('dt-timeline-container').innerHTML = html;
             document.getElementById('adminArea').style.display = localStorage.getItem("admin_pin") ? "block" : "none";
+            currentDetailAnchor = anchorEl || null;
             document.getElementById('detailModal').style.display = 'block';
+            positionDetailModal(currentDetailAnchor);
         }
 
         let adminStatusUpdateBusy = false;
@@ -4518,6 +4555,9 @@ HTML_TEMPLATE = """
         window.addEventListener('resize', () => {
             clearTimeout(boardResizeTimer);
             boardResizeTimer = setTimeout(() => {
+                if (document.getElementById('detailModal')?.style.display === 'block') {
+                    positionDetailModal(currentDetailAnchor);
+                }
                 if (!ensureResponsiveBoardLimit()) return;
                 fetchData();
             }, 180);
@@ -4603,7 +4643,7 @@ HTML_TEMPLATE = """
             };
             list.innerHTML = items.map(renderAttentionItem).join('');
             list.querySelectorAll('.attention-item').forEach(item => {
-                item.addEventListener('click', () => openDetailModal(item.dataset.machine, item.dataset.name));
+                item.addEventListener('click', () => openDetailModal(item.dataset.machine, item.dataset.name, item));
             });
         }
 

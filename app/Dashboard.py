@@ -1503,25 +1503,37 @@ HTML_TEMPLATE = """
 
         /* MODAL */
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.85); overflow-y: auto; padding: 20px 0; box-sizing: border-box;}
-        .modal-content { background-color: #1e1e1e; margin: 0 auto; padding: 15px; border: 1px solid #444; border-radius: 10px; width: 340px; max-width: 92%; position: relative; margin-bottom: 30px;}
+        .modal-content { background-color: #1e1e1e; margin: 0 auto; padding: 16px; border: 1px solid #444; border-radius: 10px; width: 340px; max-width: 92%; position: relative; margin-bottom: 30px;}
+        #detailModal .modal-content { width: 520px; max-width: 94%; }
         .close-x { position: absolute; right: 5px; top: 0px; font-size: 28px; color: #aaa; cursor: pointer; padding: 10px; line-height: 1; z-index: 10;}
         .close-x:hover { color: white; }
         .pin-input { width: 100%; box-sizing: border-box; padding: 10px; margin: 10px 0; background: #111; color: #00ffcc; border: 1px solid #555; border-radius: 8px; font-size: 18px; text-align: center; letter-spacing: 5px; font-weight: bold; outline: none;}
         .detail-header { border-bottom: 1px solid #333; padding-bottom: 8px; margin-bottom: 10px; padding-right: 30px; }
         .detail-name { font-size: 14px; color: #00ffcc; font-weight: bold; word-break: break-all; margin-bottom: 3px;}
-        .detail-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12px; border-bottom: 1px dashed #2a2a2a; padding-bottom: 4px;}
-        .detail-label { color: #888; } .detail-value { font-weight: bold; color: #fff;} .val-m2 { color: #00fa9a; }
-        .timeline { margin-top: 8px; border-left: 2px solid #444; padding-left: 12px; margin-left: 5px; }
+        .detail-subtitle { color: #9aa4b2; font-size: 11px; line-height: 1.4; margin-top: 4px; }
+        .detail-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+        .detail-summary-card { background: #11161f; border: 1px solid #2b3442; border-radius: 8px; padding: 8px 10px; min-height: 50px; }
+        .detail-summary-card span { display: block; color: #8b97a9; font-size: 10px; font-weight: 800; text-transform: uppercase; margin-bottom: 4px; }
+        .detail-summary-card strong { color: #f8fafc; font-size: 13px; font-weight: 900; word-break: break-word; }
+        .detail-summary-card .val-m2 { color: #00fa9a; }
+        .detail-body-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+        .detail-section { background: #11161f; border: 1px solid #2b3442; border-radius: 8px; overflow: hidden; }
+        .detail-section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; padding: 0 10px; color: #cbd5e1; font-size: 11px; font-weight: 900; text-transform: uppercase; border-bottom: 1px solid #243041; background: #0d121b; }
+        .detail-section-body { padding: 10px; }
+        .detail-section-body.compact { display: grid; gap: 8px; }
+        .detail-section-body .timeline { margin: 0; padding-left: 12px; margin-left: 3px; }
+        .timeline { border-left: 2px solid #444; padding-left: 12px; margin-left: 5px; }
         .tl-item { margin-bottom: 12px; position: relative; }
         .tl-item::before { content: ''; position: absolute; left: -18px; top: 3px; width: 8px; height: 8px; border-radius: 50%; background: #555; border: 2px solid #1e1e1e; }
         .tl-item.tl-export::before { background: var(--stage-export); } .tl-item.tl-rip::before { background: var(--stage-rip); } .tl-item.tl-run::before { background: var(--stage-run); } .tl-item.tl-done::before { background: var(--stage-done); } .tl-item.tl-cancel::before { background: var(--stage-cancel); }
         .tl-time { font-size: 10px; color: #aaa; margin-bottom: 1px;} .tl-desc { font-size: 12px; font-weight: bold; color: #fff;}
         .tl-duration { font-size: 10px; color: #ff9900; margin-top: 3px; display: inline-block; background: rgba(255,153,0,0.1); padding: 2px 6px; border-radius: 4px; border: 1px solid #ff9900;}
-        .admin-section { display: none; margin-top: 15px; padding-top: 10px; border-top: 2px solid #444; }
-        .admin-title { font-size: 11px; color: #ff3333; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; text-align: center;}
-        .action-btn { display: block; width: 100%; padding: 8px; margin-bottom: 6px; border: none; border-radius: 5px; font-size: 12px; font-weight: bold; cursor: pointer;}
+        .admin-section { display: none; }
+        .admin-section .detail-section-body { display: grid; gap: 8px; }
+        .action-btn { display: block; width: 100%; padding: 9px 10px; margin-bottom: 0; border: none; border-radius: 6px; font-size: 12px; font-weight: 900; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
         .action-btn:disabled, .preview-action-btn:disabled { opacity: .55; cursor: wait; filter: grayscale(.25); }
         .btn-submit { background-color: #00ffcc; color: black; margin-top: 10px;} .btn-done { background-color: #33cc33; color: black;} .btn-cancel { background-color: #ff3333; color: white;} .btn-reset { background-color: #ff9900; color: black;} .btn-confirm-runs { background-color: #3b82f6; color: white; }
+        #adminArea .action-btn + .action-btn { margin-top: 0; }
 
         /* QUICK FILTER */
         .quick-select { background: #00ffcc !important; color: #000 !important; font-weight: bold; padding: 6px 12px !important; border-radius: 5px; cursor: pointer; border: 1px solid #00ffcc; outline: none; transition: 0.2s;}
@@ -2642,23 +2654,40 @@ HTML_TEMPLATE = """
             <div class="detail-header">
                 <span id="dt-badge" class="badge"></span>
                 <div id="dt-name" class="detail-name">Tên file</div>
+                <div class="detail-subtitle">Thẻ cần xử lý</div>
             </div>
-            <div class="detail-row"><span class="detail-label">Trạng thái:</span><span class="detail-value" id="dt-status"></span></div>
-            <div class="detail-row"><span class="detail-label">Kích thước:</span><span class="detail-value val-m2" id="dt-m2"></span></div>
-            <div style="margin-top: 12px; font-size: 12px; color: #00ffcc; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 4px;">Nhật ký chi tiết</div>
-            <div id="dt-timeline-container"></div>
+            <div class="detail-summary-grid">
+                <div class="detail-summary-card">
+                    <span>Trạng thái</span>
+                    <strong id="dt-status"></strong>
+                </div>
+                <div class="detail-summary-card">
+                    <span>Kích thước</span>
+                    <strong class="val-m2" id="dt-m2"></strong>
+                </div>
+            </div>
+            <div class="detail-body-grid">
+                <section class="detail-section">
+                    <div class="detail-section-title">Nhật ký chi tiết</div>
+                    <div class="detail-section-body">
+                        <div id="dt-timeline-container"></div>
+                    </div>
+                </section>
+
+                <div id="adminArea" class="detail-section admin-section">
+                    <div class="detail-section-title">Hành động xử lý</div>
+                    <div class="detail-section-body compact">
+                        <button class="action-btn btn-done" onclick="forceUpdate('DONE')">Chuyển sang: Đã xong</button>
+                        <button class="action-btn btn-cancel" onclick="forceUpdate('DELETED')">Chuyển sang: Xóa/Hủy</button>
+                        <button class="action-btn btn-reset" onclick="forceUpdate('EXPORTED')">Chuyển sang: Xuất lại</button>
+                        <button id="confirmRunsBtn" class="action-btn btn-confirm-runs" style="display:none;" onclick="confirmRuns()">Xác nhận In x đúng</button>
+                    </div>
+                </div>
+            </div>
 
             <input type="hidden" id="modal-machine-name">
             <input type="hidden" id="modal-real-name">
             <input type="hidden" id="modal-file-hash">
-
-            <div id="adminArea" class="admin-section">
-                <div class="admin-title">Quản trị viên</div>
-                <button class="action-btn btn-done" onclick="forceUpdate('DONE')">Chuyển sang: Đã xong</button>
-                <button class="action-btn btn-cancel" onclick="forceUpdate('DELETED')">Chuyển sang: Xóa/Hủy</button>
-                <button class="action-btn btn-reset" onclick="forceUpdate('EXPORTED')">Chuyển sang: Xuất lại</button>
-                <button id="confirmRunsBtn" class="action-btn btn-confirm-runs" style="display:none;" onclick="confirmRuns()">Xác nhận In x đúng</button>
-            </div>
         </div>
     </div>
 

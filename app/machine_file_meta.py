@@ -1,5 +1,6 @@
 import os
 import re
+import struct
 
 try:
     from PIL import Image
@@ -15,12 +16,17 @@ except Exception:
 
 
 MACHINE_SHARE_ROOTS = {
-    "InDecal": [r"\\InDecal\D"],
-    "indecal": [r"\\InDecal\D"],
-    "InBat": [r"\\InBat\D"],
-    "inbat": [r"\\InBat\D"],
+    "InDecal": [r"\\InDecal\D", r"\\InDecal\E"],
+    "indecal": [r"\\InDecal\D", r"\\InDecal\E"],
+    "InBat": [r"\\InBat\D", r"\\InBat\E"],
+    "inbat": [r"\\InBat\D", r"\\InBat\E"],
     "CNC": [r"\\CNC\CNC\CNC"],
     "cnc": [r"\\CNC\CNC\CNC"],
+}
+
+MACHINE_PREVIEW_ROOTS = {
+    "InBat": [r"\\InBat\PrintMon USB3.0 510 508GS 1020\Preview"],
+    "inbat": [r"\\InBat\PrintMon USB3.0 510 508GS 1020\Preview"],
 }
 
 
@@ -81,6 +87,8 @@ def machine_file_candidates(machine, file_path, file_name="", event_time=""):
         elif date_part and display:
             candidates.append(_join_win(root, date_part, "New Folder", display))
             candidates.append(_join_win(root, date_part, display))
+            if machine_key.lower() == "indecal":
+                candidates.append(_join_win(root, "Tem", display))
 
     expanded = []
     for candidate in candidates:
@@ -103,16 +111,41 @@ def resolve_machine_file_path(machine, file_path, file_name="", event_time="", e
     return ""
 
 
+def _local_drive_path_from_share(path):
+    normalized = _norm(path)
+    match = re.match(r"^\\\\[^\\]+\\([A-Za-z])\\(.+)$", normalized)
+    if match:
+        return match.group(1).upper() + ":\\" + match.group(2)
+    return normalized
+
+
+def _printmon_preview_name(path):
+    local_path = _local_drive_path_from_share(path)
+    if not local_path:
+        return ""
+    return re.sub(r"[:\\/\.]", "_", local_path).strip("_") + ".bmp"
+
+
+def find_machine_thumbnail_source(machine, file_path, exists_func=os.path.exists):
+    preview_name = _printmon_preview_name(file_path)
+    if not preview_name:
+        return None
+    for root in MACHINE_PREVIEW_ROOTS.get(str(machine or "").strip(), []):
+        candidate = _join_win(root, preview_name)
+        try:
+            if candidate and exists_func(candidate):
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
 def find_thumbnail_source(file_path):
     lowered = str(file_path or "").lower()
-    if lowered.endswith((".tif", ".tiff", ".jpg", ".jpeg")) and os.path.exists(file_path):
+    if lowered.endswith((".tif", ".tiff", ".jpg", ".jpeg", ".bmp")) and os.path.exists(file_path):
         return file_path
     if not lowered.endswith((".prn", ".prt")):
         return None
-
-    direct_bmp = file_path + ".bmp"
-    if os.path.exists(direct_bmp):
-        return direct_bmp
 
     base = os.path.splitext(file_path)[0]
     if base.lower().endswith("~ghost"):
@@ -145,6 +178,9 @@ def find_thumbnail_source(file_path):
                         return candidate
         except Exception:
             continue
+    direct_bmp = file_path + ".bmp"
+    if os.path.exists(direct_bmp):
+        return direct_bmp
     return None
 
 
@@ -218,6 +254,38 @@ def _read_image_meta(source, include_area=True, source_kind="image"):
     return meta
 
 
+def _read_rip_header_meta(source):
+    lowered = str(source or "").lower()
+    if not lowered.endswith((".prn", ".prt")) or not os.path.exists(source):
+        return {}
+    try:
+        with open(source, "rb") as handle:
+            raw = handle.read(24)
+        if len(raw) < 24:
+            return {}
+        magic, dpi_x, dpi_y, row_bytes, height_px, width_px = struct.unpack("<6I", raw)
+        if dpi_x <= 0 or dpi_y <= 0 or width_px <= 0 or height_px <= 0:
+            return {}
+        width_cm = width_px / dpi_x * 2.54
+        height_cm = height_px / dpi_y * 2.54
+        if not (0 < width_cm < 2000 and 0 < height_cm < 2000):
+            return {}
+        return {
+            "source_kind": "rip_file_header",
+            "image_width_px": int(width_px),
+            "image_height_px": int(height_px),
+            "dpi_x": float(dpi_x),
+            "dpi_y": float(dpi_y),
+            "rip_header_magic": int(magic),
+            "rip_row_bytes": int(row_bytes),
+            "width_cm": width_cm,
+            "height_cm": height_cm,
+            "area_m2": (width_cm * height_cm) / 10000.0,
+        }
+    except Exception:
+        return {}
+
+
 def collect_machine_file_meta(file_path, thumbnail_source=None):
     meta = {}
     source = thumbnail_source or file_path
@@ -236,6 +304,18 @@ def collect_machine_file_meta(file_path, thumbnail_source=None):
             meta["meta_error"] = str(exc)
 
     path_lowered = str(file_path or "").lower()
+    if path_lowered.endswith((".prn", ".prt")) and os.path.exists(file_path):
+        try:
+            rip_meta = _read_rip_header_meta(file_path)
+            if rip_meta:
+                if "width_cm" in meta and "height_cm" in meta:
+                    meta["design_width_cm"] = meta["width_cm"]
+                    meta["design_height_cm"] = meta["height_cm"]
+                    meta["design_area_m2"] = meta.get("area_m2")
+                meta.update(rip_meta)
+        except Exception as exc:
+            meta["meta_error"] = str(exc)
+
     if analyze_tap_file and path_lowered.endswith((".tap", ".nc", ".txt")) and os.path.exists(file_path):
         try:
             tap_meta = analyze_tap_file(file_path)
@@ -243,7 +323,11 @@ def collect_machine_file_meta(file_path, thumbnail_source=None):
         except Exception as exc:
             meta["meta_error"] = str(exc)
 
-    if image_source:
+    if meta.get("source_kind") == "rip_file_header":
+        meta["metadata_source"] = file_path
+        if image_source and image_source != file_path:
+            meta["design_metadata_source"] = image_source
+    elif image_source:
         meta["metadata_source"] = image_source
     if source and source != image_source:
         meta["preview_source"] = source
@@ -254,8 +338,19 @@ def collect_machine_file_meta_for_server(machine, file_path, file_name="", event
     resolved = resolve_machine_file_path(machine, file_path, file_name, event_time)
     if not resolved:
         return {}
-    thumb = find_thumbnail_source(resolved)
+    thumb = find_machine_thumbnail_source(machine, resolved) or find_thumbnail_source(resolved)
     meta = collect_machine_file_meta(resolved, thumb)
     if meta:
+        meta["resolved_file_path"] = resolved
+    return meta
+
+
+def collect_rip_header_meta_for_server(machine, file_path, file_name="", event_time=""):
+    resolved = resolve_machine_file_path(machine, file_path, file_name, event_time)
+    if not resolved:
+        return {}
+    meta = _read_rip_header_meta(resolved)
+    if meta:
+        meta["metadata_source"] = resolved
         meta["resolved_file_path"] = resolved
     return meta

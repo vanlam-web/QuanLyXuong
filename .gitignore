@@ -5,8 +5,10 @@ __pycache__/
 
 # PyInstaller/build outputs
 build/
+build-*/
 build-dashboard-hotfix-spec/
 dist/
+dist-*/
 dist-new/
 releases/
 backups/
@@ -22,6 +24,8 @@ warn-*.txt
 # Local executables and runtime data
 *.exe
 *.log
+*.bak_*
+tmp_*.jpg
 *.db
 *.db-shm
 *.db-wal

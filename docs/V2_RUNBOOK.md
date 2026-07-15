@@ -90,12 +90,54 @@ powershell -ExecutionPolicy Bypass -File \\192.168.1.188\AI\Tools\scripts\Start-
 
 Launcher nay:
 
-- copy `QuanLyXuong.exe` tu NAS ve `C:\QuanLyXuong\Client`
+- copy `QuanLyXuong.exe` tu NAS ve `C:\QuanLyXuong\QuanLyXuong_Local.exe` va `C:\QuanLyXuong\Client`
 - verify hash theo `BUILD_MANIFEST.json`
-- chay ban local `C:\QuanLyXuong\Client\QuanLyXuong.exe`
+- chay ban local `C:\QuanLyXuong\QuanLyXuong_Local.exe`
 - khong khoa file exe tren NAS
 
+Nguon update hien tai uu tien `\\192.168.1.188\AI\Tools\dist-auto-update`, vi `dist\QuanLyXuong.exe` co the bi khoa neu may cu dang chay truc tiep tu NAS. Khi tat het may cu va copy duoc ban moi vao `dist`, co the quay lai `dist`.
+
 Sau khi chay, dashboard `:5000 -> He thong` phai thay version may va co `agent_outbox_<may>.db`.
+
+## Tu cap nhat client khi may ranh
+
+Dung cho moi may san xuat de tu cap nhat `QuanLyXuong.exe` khi may khong dang van hanh.
+
+Script chay dinh ky:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File \\192.168.1.188\AI\Tools\scripts\Update-WorkstationClientIfIdle.ps1 -Machine InBat
+```
+
+Co che mac dinh an toan:
+
+- doc dashboard `:5000/api/data` de xem may co `RUNNING` hay `RIP` khong
+- InBat/InDecal: neu con `RUNNING` hoac `RIP` thi ghi `BUSY` va bo qua
+- CNC: neu con `RUNNING` hoac `EXPORTED` thi ghi `BUSY` va bo qua
+- khi khong con hang san chay thi copy client moi ve `C:\QuanLyXuong\QuanLyXuong_Local.exe` va `C:\QuanLyXuong\Client`
+- verify hash bang `BUILD_MANIFEST.json`
+- start lai client local
+
+Neu da xac nhan viec restart client khong anh huong log/san xuat, co the cap nhat ngay ke ca dang co hang:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File \\192.168.1.188\AI\Tools\scripts\Update-WorkstationClientIfIdle.ps1 -Machine InBat -AllowWhileActive
+```
+
+Cai Scheduled Task 5 phut/lần tren tung may:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File \\192.168.1.188\AI\Tools\scripts\Install-WorkstationAutoUpdateTask.ps1 -Machine InBat
+powershell -ExecutionPolicy Bypass -File \\192.168.1.188\AI\Tools\scripts\Install-WorkstationAutoUpdateTask.ps1 -Machine InDecal
+powershell -ExecutionPolicy Bypass -File \\192.168.1.188\AI\Tools\scripts\Install-WorkstationAutoUpdateTask.ps1 -Machine CNC
+```
+
+Log tren tung may:
+
+```text
+C:\QuanLyXuong\Client\auto_update.log
+C:\QuanLyXuong\Client\auto_update_state.json
+```
 
 Neu muon bridge chay dry-run loop cung luc:
 
@@ -171,6 +213,25 @@ Sidebar:
 - `May san xuat`: xem nhanh may dang mo/chua mo va so dang/cho/xong/ton cu.
 - `Thong ke`: dong `Tong | hoan thanh | loi` tren mot hang. Tung may `InBat/InDecal/CNC` hien hoan thanh ben trai va loi ben phai. Khi chon `m2`, loi la m2 hong uoc tinh; khi chon `So luong`, loi la so job loi/huy san xuat.
 - `Khach hang`: top ngan gon theo bo loc hien tai.
+
+Tien do va ETA may dang chay:
+
+- InBat/InDecal: `%` lay tu `current_pass / total_pass` cua may in.
+- InDecal preview: neu log chi con `Vietphuong2.prn`/ten ngan, dashboard co the ghep lai `\\InDecal\D\Tem\<ten>.prn` va lay preview tu `\\InDecal\D\Tem\<ten>.prn.bmp`.
+- CNC: `%` uu tien quang duong cat that trong TAP: `current_path_length / total_path_length`.
+  - Bridge doc `NCSTUDIO.DYN` de lay `current_line`.
+  - `tap_preview.estimate_tap_path_progress()` map `current_line` vao cac segment TAP va tinh tong chieu dai XY da cat.
+  - Neu khong doc duoc TAP hoac khong co segment, moi fallback ve `current_line / line_count`.
+- ETA chi hien sau khi dashboard thay count that tang qua it nhat 2 mau. Truoc do hien `dang tinh thoi gian`.
+- Neu tho bam tam dung tren may, sidebar hien `tam dung` va khong hien ETA.
+- Reload browser khong lam mat mau ETA gan nhat, vi dashboard luu tam trong `localStorage`.
+- InBat ETA dung mau pass tang dan giong InDecal; neu chua du 2 mau pass tang thi hien `dang tinh thoi gian`.
+- Dashboard tu poll `/api/data` moi 3 giay khi websocket dang bat, de `%`/ETA InBat, InDecal va CNC nhay ma khong can reload trang.
+
+Gioi han hien tai:
+
+- CNC path-length chinh xac hon line-count, nhung chua tinh khac biet toc do feed, Z move, pause, tool/spindle delay, va arc `G2/G3` van gan dung theo chord neu parser chi co start/end.
+- Neu CNC bridge chua restart sau deploy, dashboard van chay UI moi nhung CNC live van co the chua gui `current_path_length/total_path_length`.
 
 Can xem trong tab `He thong`:
 

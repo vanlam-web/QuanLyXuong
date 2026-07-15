@@ -240,6 +240,7 @@ def send_zalo(msg):
 # 🌟 BỘ GỌT GIŨA CHỮ: Chuẩn hóa "Đang in (L1)" -> "In", "Xong RIP" -> "Rip file"
 def format_event_name(txt):
     if not txt: return "Không rõ"
+    if txt == "PAUSE": return "Tạm dừng"
     if txt == "EXPORT" or txt == "EXPORTED" or "Xuất" in txt: return "Xuất file"
     if "RIP" in txt.upper(): return "Rip file"
     
@@ -557,15 +558,129 @@ async def log_event(data: RequestData):
                 conn.close()
                 return {"status": "success", "msg": "Duplicate event ignored"}
 
-        status_weight = {"EXPORT": 1, "EXPORTED": 1, "RIP": 2, "PRINTING": 3, "DONE": 4, "DELETE": 0, "DELETED": 0}
+        status_weight = {"EXPORT": 1, "EXPORTED": 1, "RIP": 2, "PRINTING": 3, "CUTTING": 3, "PAUSE": 3, "DONE": 4, "DELETE": 0, "DELETED": 0}
         new_weight = status_weight.get(new_status, 0)
         
         m_action = "Cắt" if MACHINES.get(real_machine, "PRINT") == "CUT" else "In"
 
+        if data.event_type == "ROLLOVER":
+            rollover_source_path = str((incoming_meta or {}).get("rollover_source_path") or data.path or "")
+            rollover_source_name = str((incoming_meta or {}).get("rollover_source_name") or os.path.basename(rollover_source_path) or "")
+            rollover_target_path = str((incoming_meta or {}).get("rollover_target_path") or "")
+            rollover_target_name = str((incoming_meta or {}).get("rollover_target_name") or "")
+
+            row_source = None
+            if rollover_source_path:
+                c.execute(
+                    """
+                    SELECT file_hash, file_name, file_path, status, history, machine_meta_json
+                    FROM files
+                    WHERE machine=? AND LOWER(file_path)=LOWER(?)
+                    ORDER BY updated_time DESC
+                    LIMIT 1
+                    """,
+                    (real_machine, rollover_source_path),
+                )
+                row_source = c.fetchone()
+            if not row_source and rollover_source_name:
+                c.execute(
+                    """
+                    SELECT file_hash, file_name, file_path, status, history, machine_meta_json
+                    FROM files
+                    WHERE machine=? AND LOWER(file_name)=LOWER(?)
+                    ORDER BY updated_time DESC
+                    LIMIT 1
+                    """,
+                    (real_machine, rollover_source_name),
+                )
+                row_source = c.fetchone()
+
+            if row_source:
+                try:
+                    hist_list = json.loads(row_source[4] or "[]")
+                except Exception:
+                    hist_list = []
+                hist_list.append({
+                    "status": "ROLLED_OVER",
+                    "time": event_time,
+                    "event": "Chuyển qua ngày mới",
+                    "new_path": rollover_target_path,
+                    "new_name": rollover_target_name,
+                    "old_path": rollover_source_path,
+                    "old_name": rollover_source_name,
+                    "reason": (incoming_meta or {}).get("rollover_reason", "new_day"),
+                })
+                merged_meta = merge_machine_meta(row_source[5] if row_source[5] else "{}", incoming_meta)
+                merged_meta.update({
+                    "rollover_source_path": rollover_source_path,
+                    "rollover_source_name": rollover_source_name,
+                    "rollover_target_path": rollover_target_path,
+                    "rollover_target_name": rollover_target_name,
+                    "rollover_reason": (incoming_meta or {}).get("rollover_reason", "new_day"),
+                    "rollover_event_time": event_time,
+                })
+                c.execute(
+                    "UPDATE files SET status='ROLLED_OVER', updated_time=?, history=?, machine_meta_json=? WHERE file_hash=?",
+                    (event_time, json.dumps(hist_list, ensure_ascii=False), json.dumps(merged_meta, ensure_ascii=False), row_source[0]),
+                )
+                for key in keys_to_check:
+                    c.execute(
+                        """
+                        INSERT OR IGNORE INTO processed_event_keys
+                            (idempotency_key, event_id, machine, event_type, file_path, created_time)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (key, data.event_id, real_machine, data.event_type, data.path, event_time),
+                    )
+                conn.commit()
+                conn.close()
+                try: await manager.broadcast("NEW_DATA")
+                except: pass
+                log_sys(f"[{real_machine.upper()}] ROLLOVER: {os.path.basename(rollover_source_path) or rollover_source_name} -> {os.path.basename(rollover_target_path) or rollover_target_name}")
+                return {"status": "success"}
+
+            log_sys(f"[{real_machine.upper()}] ROLLOVER missing source row: {rollover_source_path or rollover_source_name}")
+            for key in keys_to_check:
+                c.execute(
+                    """
+                    INSERT OR IGNORE INTO processed_event_keys
+                        (idempotency_key, event_id, machine, event_type, file_path, created_time)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (key, data.event_id, real_machine, data.event_type, data.path, event_time),
+                )
+            conn.commit()
+            conn.close()
+            return {"status": "success", "msg": "Rollover source row not found"}
+
         # ==========================================
         # KỊCH BẢN 1: IN XONG (DONE) - ĐÃ BỔ SUNG GHI NHẬT KÝ & TÍNH GIỜ
         # ==========================================
-        if new_status == "DONE":
+        if new_status == "PAUSE":
+            c.execute("SELECT status, history, machine_meta_json FROM files WHERE file_hash=?", (active_hash,))
+            row_active = c.fetchone()
+            if row_active:
+                curr_status = row_active[0]
+                hist_str = row_active[1] if row_active[1] else "[]"
+                merged_meta = merge_machine_meta(row_active[2] if row_active[2] else "{}", incoming_meta)
+                try:
+                    h_list = json.loads(hist_str)
+                    h_list.append({
+                        "status": "PAUSED",
+                        "time": event_time,
+                        "event": "PAUSE",
+                        "old_status": curr_status,
+                        "reason": "Tạm dừng CNC",
+                    })
+                    hist_str = json.dumps(h_list, ensure_ascii=False)
+                except:
+                    pass
+                c.execute(
+                    "UPDATE files SET updated_time=?, history=?, machine_meta_json=? WHERE file_hash=?",
+                    (event_time, hist_str, json.dumps(merged_meta, ensure_ascii=False), active_hash),
+                )
+
+        elif new_status == "DONE":
             c.execute("SELECT run_count, history FROM files WHERE file_hash=?", (done_hash,))
             row_done = c.fetchone()
             
@@ -701,6 +816,34 @@ async def log_event(data: RequestData):
                 # Keep the current status instead of auto-moving production jobs to DELETED.
                 if new_status == curr_status:
                     try:
+                        try:
+                            current_history = json.loads(hist_str or "[]")
+                        except Exception:
+                            current_history = []
+                        last_history = current_history[-1] if current_history else {}
+                        if new_status in ("PRINTING", "CUTTING") and last_history.get("status") == "PAUSED":
+                            event_text = format_event_name(data.event_type)
+                            current_history.append({
+                                "status": new_status,
+                                "time": event_time,
+                                "event": event_text,
+                                "resume_after_pause": True,
+                            })
+                            resolved_file_path = prefer_full_file_path(stored_file_path, data.path)
+                            resumed_meta = merge_machine_meta(stored_meta_json, incoming_meta)
+                            c.execute(
+                                "UPDATE files SET file_path=?, updated_time=?, history=?, machine_meta_json=? WHERE file_hash=?",
+                                (
+                                    resolved_file_path,
+                                    event_time,
+                                    json.dumps(current_history, ensure_ascii=False),
+                                    json.dumps(resumed_meta, ensure_ascii=False),
+                                    active_hash,
+                                ),
+                            )
+                            conn.commit()
+                            conn.close()
+                            return {"status": "success", "msg": "Resumed after pause"}
                         last_updated = datetime.strptime(last_updated_str, "%Y-%m-%d %H:%M:%S")
                         elapsed_mins = (datetime.strptime(event_time, "%Y-%m-%d %H:%M:%S") - last_updated).total_seconds() / 60
                         

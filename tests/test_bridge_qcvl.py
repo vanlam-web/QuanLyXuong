@@ -68,6 +68,37 @@ class BridgeQcvlTests(unittest.TestCase):
         self.assertEqual(payload["parsed"]["quantity"], 2)
         self.assertEqual(len(payload["legacy_event_hash"]), 64)
 
+    def test_make_payload_prefers_rip_header_dimensions_over_filename(self):
+        row = {
+            "file_hash": "hash-rip",
+            "file_name": "yte_600x240.prt",
+            "file_path": r"D:\Jobs\yte_600x240.prt",
+            "machine": "InBat",
+            "job_type": "PRINT",
+            "status": "DONE",
+            "created_time": "2026-07-14 16:00:00",
+            "updated_time": "2026-07-14 16:30:00",
+            "run_count": 1,
+            "history": "[]",
+            "machine_meta_json": json.dumps(
+                {
+                    "source_kind": "rip_file_header",
+                    "width_cm": 240.05,
+                    "height_cm": 600.02,
+                    "area_m2": 14.404,
+                    "metadata_source": r"\\InBat\D\2026-07-14\New Folder\yte_600x240.prt",
+                }
+            ),
+        }
+
+        payload = bridge_qcvl.make_payload("InBat", row)
+
+        self.assertEqual(payload["parse_status"], "ok")
+        self.assertEqual(payload["parsed"]["width_m"], 2.4005)
+        self.assertEqual(payload["parsed"]["height_m"], 6.0002)
+        self.assertEqual(payload["parsed"]["area_m2"], 14.404)
+        self.assertEqual(payload["parsed"]["dimension_source"], "rip_file_header")
+
     def test_payload_shape_matches_schema_required_fields(self):
         schema_path = Path(PROJECT_ROOT) / "docs" / "production-event.schema.json"
         with open(schema_path, "r", encoding="utf-8") as handle:
@@ -160,6 +191,86 @@ class BridgeQcvlTests(unittest.TestCase):
             self.assertEqual(payloads[0]["raw_file_name"], "KH000003_120x50_x2.prn")
             state = json.loads(state_file.read_text(encoding="utf-8"))
             self.assertEqual(state["processed"], {})
+
+    def test_run_once_includes_machine_meta_json_when_available(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            data_dir.mkdir()
+            db_path = data_dir / "InBat.db"
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    """
+                    create table files (
+                        file_hash text,
+                        file_name text,
+                        file_path text,
+                        machine text,
+                        job_type text,
+                        status text,
+                        created_time text,
+                        updated_time text,
+                        run_count integer,
+                        history text,
+                        machine_meta_json text
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    insert into files values (
+                        'hash-4',
+                        'yte_600x240.prt',
+                        'D:\\Jobs\\yte_600x240.prt',
+                        'InBat',
+                        'PRINT',
+                        'DONE',
+                        '2026-07-14 16:00:00',
+                        '2026-07-14 16:30:00',
+                        1,
+                        '[]',
+                        ?
+                    )
+                    """,
+                    (
+                        json.dumps(
+                            {
+                                "source_kind": "rip_file_header",
+                                "width_cm": 240.05,
+                                "height_cm": 600.02,
+                                "area_m2": 14.404,
+                            }
+                        ),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            state_file = Path(temp_dir) / "state.json"
+            dump_file = Path(temp_dir) / "events.jsonl"
+            log_file = Path(temp_dir) / "bridge.log"
+            args = Namespace(
+                data_dir=str(data_dir),
+                state_file=str(state_file),
+                log_file=str(log_file),
+                api_base_url="",
+                api_token="",
+                since_minutes=60 * 24 * 365,
+                limit=10,
+                timeout=1,
+                dry_run=True,
+                dump_jsonl=str(dump_file),
+                save_checkpoint=False,
+            )
+
+            failed = bridge_qcvl.run_once(args)
+
+            self.assertEqual(failed, 0)
+            payloads = [json.loads(line) for line in dump_file.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(payloads[0]["parsed"]["width_m"], 2.4005)
+            self.assertEqual(payloads[0]["parsed"]["height_m"], 6.0002)
+            self.assertEqual(payloads[0]["parsed"]["dimension_source"], "rip_file_header")
 
 
 if __name__ == "__main__":

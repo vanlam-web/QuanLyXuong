@@ -17,8 +17,10 @@ from qlx_workstation_logic import (
     is_export_file,
     is_meta_file,
     make_event_identity,
+    normalize_inbat_feed_progress,
     parse_machine_aliases,
     parse_cnc_log_lines,
+    parse_inbat_printfile_progress,
     parse_inbat_printmon_snapshot,
     parse_indecal_log_lines,
     plan_scan_events,
@@ -81,6 +83,54 @@ class WorkstationLogicTests(unittest.TestCase):
 
         event, state = parse_inbat_printmon_snapshot(raw_done, *state)
         self.assertEqual(event, ("DONE", r"D:\Jobs\KH001.prn"))
+
+    def test_inbat_printfile_progress_reads_printmon_offsets(self):
+        raw = bytearray(b"xxD:\\Jobs\\KH001.prt")
+        raw.extend(b"\x00" * (272 - len(raw)))
+        raw[260:264] = (1).to_bytes(4, "little")
+        raw[264:268] = (18).to_bytes(4, "little")
+        raw[268:272] = (545).to_bytes(4, "little")
+
+        meta = parse_inbat_printfile_progress(bytes(raw))
+
+        self.assertEqual(meta["progress_source"], "inbat_printfile_steps")
+        self.assertEqual(meta["current_pass"], 18)
+        self.assertEqual(meta["total_pass"], 545)
+        self.assertAlmostEqual(meta["progress_percent"], 18 * 100.0 / 545)
+
+    def test_inbat_printmon_snapshot_emits_progress_updates(self):
+        def raw_with_pass(current_pass):
+            raw = bytearray(b"xxD:\\Jobs\\KH001.prt")
+            raw.extend(b"\x00" * (272 - len(raw)))
+            raw[260:264] = (1).to_bytes(4, "little")
+            raw[264:268] = current_pass.to_bytes(4, "little")
+            raw[268:272] = (545).to_bytes(4, "little")
+            return bytes(raw)
+
+        event, state = parse_inbat_printmon_snapshot(raw_with_pass(18), None, None)
+        self.assertEqual(event[0:2], ("PRINTING", r"D:\Jobs\KH001.prt"))
+        self.assertEqual(event[2]["current_pass"], 18)
+        self.assertAlmostEqual(event[2]["progress_percent"], 18 * 100.0 / 545)
+
+        event, state = parse_inbat_printmon_snapshot(raw_with_pass(24), *state)
+        self.assertEqual(event[0:2], ("PRINTING", r"D:\Jobs\KH001.prt"))
+        self.assertEqual(event[2]["current_pass"], 24)
+        self.assertAlmostEqual(event[2]["progress_percent"], 24 * 100.0 / 545)
+
+    def test_normalize_inbat_feed_progress_uses_feed_length_not_printmon_total(self):
+        meta = {
+            "current_pass": 148,
+            "total_pass": 410,
+            "height_cm": 487.045,
+            "width_cm": 260.043,
+            "progress_percent": 36.1,
+        }
+        normalized = normalize_inbat_feed_progress(meta)
+        self.assertEqual(normalized["current_pass"], 148)
+        self.assertEqual(normalized["total_pass"], 203)
+        self.assertEqual(normalized["printmon_total_pass"], 410)
+        self.assertEqual(normalized["progress_source"], "inbat_feed_length_steps")
+        self.assertAlmostEqual(normalized["progress_percent"], 148 * 100.0 / 203, places=1)
 
     def test_event_identity_is_stable_for_same_logical_event(self):
         first = make_event_identity(

@@ -8,13 +8,15 @@ from datetime import datetime
 
 import requests
 
-from cnc_log_parser import parse_cnc_log_events
-from tap_preview import analyze_tap_file, find_existing_tap, render_tap_preview_b64
+from cnc_log_parser import parse_cnc_dyn_progress, parse_cnc_log_events
+from tap_preview import analyze_tap_file, estimate_tap_path_progress, find_existing_tap, render_tap_preview_b64
 
 
-BRIDGE_VERSION = "V2.0.4_CNC_NCSTUDIO_LOG"
+BRIDGE_VERSION = "V2.1.0_TEST_CNC_BRIDGE"
 DEFAULT_HISTORY = r"\\CNC\CNC\CLIENT_CNC\file_history.csv"
 DEFAULT_NCSTUDIO_LOG = r"\\CNC\Ncstudio V5.5.60\NCSTUDIO.LOG"
+DEFAULT_NCSTUDIO_DYN = r"\\CNC\Ncstudio V5.5.60\NCSTUDIO.DYN"
+DEFAULT_DYN_STALE_SECONDS = 60
 DEFAULT_STATE = r"C:\QuanLyXuong\Data\cnc_legacy_bridge_state.json"
 DEFAULT_API = "http://127.0.0.1:8000"
 
@@ -61,7 +63,7 @@ def normalize_event_type(value):
     value = (value or "").strip().upper()
     if value in ("EXPORT", "EXPORTED"):
         return "EXPORT"
-    if value in ("CUTTING", "DONE", "DELETE"):
+    if value in ("CUTTING", "DONE", "DELETE", "PAUSE"):
         return value
     return ""
 
@@ -143,6 +145,51 @@ def convert_ncstudio_events(raw_events):
         )
     return events
 
+def read_dyn_progress_event(dyn_path, state, stale_seconds=DEFAULT_DYN_STALE_SECONDS):
+    current_path = (state or {}).get("current_cut_path") or ""
+    if not current_path or not dyn_path or not os.path.exists(dyn_path):
+        return None
+    tap_path = find_existing_tap(current_path)
+    line_count = 0
+    if tap_path:
+        try:
+            line_count = int((analyze_tap_file(tap_path) or {}).get("line_count") or 0)
+        except Exception as exc:
+            print_log(f"Cannot analyze TAP for DYN progress {tap_path}: {exc}")
+    try:
+        with open(dyn_path, "rb") as handle:
+            meta = parse_cnc_dyn_progress(handle.read(), line_count)
+    except Exception as exc:
+        print_log(f"Cannot read NCStudio DYN: {exc}")
+        return None
+    current_line = meta.get("current_line")
+    if not current_line:
+        return None
+    mtime = os.path.getmtime(dyn_path)
+    if stale_seconds and time.time() - mtime >= max(10, int(stale_seconds or 0)):
+        return None
+    dyn_key = f"{current_path}|{int(mtime)}|{current_line}"
+    if state.get("last_dyn_progress_key") == dyn_key:
+        return None
+    state["last_dyn_progress_key"] = dyn_key
+    event_time = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+    meta["progress_source"] = "cnc_dyn_line"
+    meta["progress_signal_time"] = event_time
+    if tap_path:
+        try:
+            path_meta = estimate_tap_path_progress(tap_path, current_line)
+            if path_meta:
+                meta.update(path_meta)
+        except Exception as exc:
+            print_log(f"Cannot estimate TAP path progress {tap_path}: {exc}")
+    return {
+        "event_time": event_time,
+        "event_type": "CUTTING",
+        "file_name": os.path.splitext(os.path.basename(current_path))[0],
+        "path": current_path,
+        "machine_meta": meta,
+    }
+
 
 def post_event(api_base, event):
     key_src = f"cnc-legacy|{event['event_time']}|{event['event_type']}|{event['file_name']}"
@@ -202,6 +249,13 @@ def run_once(args, state):
         events.extend(convert_ncstudio_events(parse_cnc_log_events(text.splitlines(), state=state)))
     elif ncstudio_log:
         print_log(f"NCStudio log not found: {ncstudio_log}")
+    dyn_event = read_dyn_progress_event(
+        getattr(args, "ncstudio_dyn", DEFAULT_NCSTUDIO_DYN),
+        state,
+        getattr(args, "dyn_stale_seconds", DEFAULT_DYN_STALE_SECONDS),
+    )
+    if dyn_event:
+        events.append(dyn_event)
     for event in events:
         if args.dry_run:
             print_log(f"DRY {event['event_type']}: {event['file_name']}")
@@ -219,6 +273,8 @@ def main():
     parser.add_argument("--state", default=DEFAULT_STATE)
     parser.add_argument("--api", default=DEFAULT_API)
     parser.add_argument("--ncstudio-log", default=DEFAULT_NCSTUDIO_LOG)
+    parser.add_argument("--ncstudio-dyn", default=DEFAULT_NCSTUDIO_DYN)
+    parser.add_argument("--dyn-stale-seconds", type=int, default=DEFAULT_DYN_STALE_SECONDS)
     parser.add_argument("--interval", type=int, default=10)
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--dry-run", action="store_true")

@@ -13,15 +13,17 @@ from qlx_workstation_logic import (
     is_target_file_for_machine,
     LogTailState,
     make_event_identity,
+    normalize_inbat_feed_progress,
+    parse_inbat_printmon_snapshot,
     read_new_log_lines,
     resolve_machine_config,
 )
 
-from machine_file_meta import HAS_PIL, collect_machine_file_meta, find_thumbnail_source
+from machine_file_meta import HAS_PIL, collect_machine_file_meta, find_thumbnail_source, resolve_machine_file_path
 if HAS_PIL:
     from PIL import Image
 
-CLIENT_VERSION = "V2.0.8_INDECAL_RENAME_GUARD"
+CLIENT_VERSION = "V2.1.1_INDECAL_READY_RIP"
 
 NAS_EXE_PATH = NAS_CLIENT_EXE_PATH
 
@@ -201,12 +203,48 @@ def is_meta_file(filename):
 def get_expected_meta(ext_str):
     return pure_get_expected_meta(ext_str)
 
+def resolve_indecal_runtime_path(path, file_name="", event_time=""):
+    display = os.path.basename(str(file_name or path or "")).strip()
+    candidates = [str(path or "").strip()]
+    if display:
+        if ROOT:
+            candidates.extend([
+                os.path.join(ROOT, "Tem", display),
+                os.path.join(ROOT, datetime.now().strftime("%Y-%m-%d"), "New Folder", display),
+                os.path.join(ROOT, datetime.now().strftime("%Y-%m-%d"), display),
+            ])
+    for candidate in candidates:
+        try:
+            if candidate and os.path.exists(candidate):
+                return candidate
+        except Exception:
+            continue
+    try:
+        resolved = resolve_machine_file_path(MACHINE_DISPLAY or MACHINE_NAME, path, file_name, event_time)
+        if resolved:
+            return resolved
+    except Exception:
+        pass
+    return str(path or "")
+
 def process_event(path, event_type, forced_base_id=None, forced_display_name=None, machine_meta_extra=None):
     global OUTBOX
+    resolved_path = path
+    if MACHINE_NAME == "indecal" and event_type in {"PRINTING", "DONE", "DELETE"}:
+        try:
+            candidate = resolve_indecal_runtime_path(
+                path,
+                forced_display_name or os.path.basename(path),
+                (machine_meta_extra or {}).get("log_event_time") or now(),
+            )
+            if candidate:
+                resolved_path = candidate
+        except Exception:
+            pass
     thumb_b64 = None
     file_to_thumb = None
-    if HAS_PIL and MACHINE_NAME != "cnc" and event_type in ["EXPORT", "RIP", "WRONG_DAY"]:
-        file_to_thumb = find_thumbnail_source(path)
+    if HAS_PIL and MACHINE_NAME != "cnc" and event_type in ["EXPORT", "RIP", "WRONG_DAY", "PRINTING", "DONE"]:
+        file_to_thumb = find_thumbnail_source(resolved_path) or find_thumbnail_source(path)
         if file_to_thumb:
             try:
                 with Image.open(file_to_thumb) as img:
@@ -218,15 +256,17 @@ def process_event(path, event_type, forced_base_id=None, forced_display_name=Non
             except Exception as exc:
                 log_system(f"⚠️ Không tạo được ảnh xem trước [{event_type}]: {path} -> {file_to_thumb} | {exc}", is_error=True)
         else:
-            log_system(f"⚠️ Không tìm thấy file gốc để tạo ảnh xem trước [{event_type}]: {path}", is_error=True)
+                log_system(f"⚠️ Không tìm thấy file gốc để tạo ảnh xem trước [{event_type}]: {resolved_path}", is_error=True)
 
     event_time = (machine_meta_extra or {}).get("log_event_time") or now()
-    event_id = make_event_identity(MACHINE_NAME, event_type, path, event_time, forced_base_id)
-    machine_meta = collect_machine_file_meta(path, file_to_thumb)
+    event_id = make_event_identity(MACHINE_NAME, event_type, resolved_path, event_time, forced_base_id)
+    machine_meta = collect_machine_file_meta(resolved_path, file_to_thumb) or collect_machine_file_meta(path, file_to_thumb)
     if machine_meta_extra:
         machine_meta.update(machine_meta_extra)
+    if MACHINE_NAME == "inbat":
+        normalize_inbat_feed_progress(machine_meta)
     payload = {
-        "machine": MACHINE_NAME, "path": path, "event_type": event_type,
+        "machine": MACHINE_NAME, "path": resolved_path, "event_type": event_type,
         "forced_base_id": forced_base_id, "forced_display_name": forced_display_name,
         "thumbnail_b64": thumb_b64,
         "machine_meta": machine_meta,
@@ -236,19 +276,19 @@ def process_event(path, event_type, forced_base_id=None, forced_display_name=Non
     }
 
     if OUTBOX is None:
-        log_system(f"⚠️ Outbox chưa sẵn sàng, gửi trực tiếp [{event_type}]: {os.path.basename(path)}", is_error=True)
+        log_system(f"⚠️ Outbox chưa sẵn sàng, gửi trực tiếp [{event_type}]: {os.path.basename(resolved_path)}", is_error=True)
         try:
             res = requests.post(API_SERVER_URL, json=payload, timeout=5)
             if res.status_code == 200:
-                log_system(f"📡 API Bắn Thành Công [{event_type}]: {os.path.basename(path)}")
+                log_system(f"📡 API Bắn Thành Công [{event_type}]: {os.path.basename(resolved_path)}")
             else:
-                log_system(f"⚠️ API lỗi HTTP {res.status_code} [{event_type}]: {os.path.basename(path)}", is_error=True)
+                log_system(f"⚠️ API lỗi HTTP {res.status_code} [{event_type}]: {os.path.basename(resolved_path)}", is_error=True)
         except requests.exceptions.RequestException as exc:
             log_system(f"⚠️ Mạng lỗi, chưa thể gửi trực tiếp: {exc}", is_error=True)
         return
 
     event_id = OUTBOX.enqueue(payload)
-    log_system(f"🧾 Outbox nhận [{event_type}]: {os.path.basename(path)} ({event_id[:8]})")
+    log_system(f"🧾 Outbox nhận [{event_type}]: {os.path.basename(resolved_path)} ({event_id[:8]})")
 
 def outbox_sender_worker():
     while True:
@@ -369,6 +409,19 @@ def sweep_old_files_to_today():
                             processed_set.discard(p.lower()); processed_set.add(target.lower())
                             
                         new_base = os.path.splitext(new_f_name)[0]
+                        process_event(
+                            p,
+                            "ROLLOVER",
+                            machine_meta_extra={
+                                "rollover_source_path": p,
+                                "rollover_source_name": f,
+                                "rollover_target_path": target,
+                                "rollover_target_name": new_f_name,
+                                "rollover_old_date": d,
+                                "rollover_new_date": today_str,
+                                "rollover_reason": "new_day",
+                            },
+                        )
                         process_event(target, "WRONG_DAY", forced_base_id=new_base, forced_display_name=new_base)
                     except: pass
         check_move(d_path)
@@ -380,7 +433,7 @@ def sweep_old_files_to_today():
 def worker_inbat_log():
     paths = [r"C:\Program Files (x86)\PrintMon USB3.0 510 508GS 1020\PrintFile.ini", r"C:\Program Files (x86)\PrintMon USB3.0 510 508GS 1020\PrintFile"]
     active = next((p for p in paths if os.path.exists(p)), paths[0])
-    last_raw = b""; cur_job = None; cur_switch = None 
+    last_raw = b""; cur_job = None; cur_switch = None; cur_progress_bucket = None
     
     if os.path.exists(active):
         try:
@@ -394,6 +447,24 @@ def worker_inbat_log():
                 if raw != last_raw:
                     time.sleep(0.5); 
                     with open(active, "rb") as f: raw = f.read(); last_raw = raw
+                    event, state = parse_inbat_printmon_snapshot(raw, cur_job, cur_switch, cur_progress_bucket)
+                    next_job, next_switch, next_progress_bucket = state
+                    if event:
+                        event_type, fp = event[0], event[1]
+                        meta = event[2] if len(event) > 2 else None
+                        bn = os.path.basename(fp).lower().strip()
+                        if cur_job != fp:
+                            if event_type == "PRINTING": log_system(f"Đang In: {bn}")
+                            elif event_type == "DONE": log_system(f"IN XONG SIÊU TỐC: {bn}")
+                        elif cur_switch == 1 and event_type == "DONE":
+                            log_system(f"CHỐT ĐƠN IN XONG: {bn}")
+                        elif cur_switch == 2 and event_type == "PRINTING":
+                            log_system(f"Đang In Lại: {bn}")
+                        process_event(fp, event_type, machine_meta_extra=meta)
+                    if cur_job is not None and next_job is None:
+                        log_system(f"Lệnh in DỪNG: {os.path.basename(cur_job)}")
+                    cur_job, cur_switch, cur_progress_bucket = next_job, next_switch, next_progress_bucket
+                    continue
                     ext_idx = raw.lower().find(b'.prt'); ext_idx = raw.lower().find(b'.prn') if ext_idx == -1 else ext_idx
                     if ext_idx != -1:
                         start_idx = -1

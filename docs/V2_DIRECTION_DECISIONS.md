@@ -139,6 +139,28 @@ m2_hong_uoc_tinh / (m2_hoan_thanh + m2_hong_uoc_tinh) * 100
    - Label bat buoc co chu `ước tính`.
    - Vi du `ttttp_300x250.prt` khong co meta m2 nhung ten file co `300x250` = `7.5 m2`; sau 78 giay tu moc `PRINTING`, Dashboard hien khoang `12% ước tính`.
 
+### Quyet dinh bo sung ngay 2026-07-15 - ETA live theo so dem that
+
+1. InDecal va CNC khong tinh ETA bang thoi gian tu luc bat dau nua.
+2. InDecal:
+   - `%` that lay tu `current_pass / total_pass`.
+   - ETA lay theo mau pass tang dan.
+3. CNC:
+   - `%` that lay tu quang duong cat: `current_path_length / total_path_length`.
+   - Fallback line-count chi dung khi khong doc duoc TAP path.
+4. ETA tren sidebar chi tinh khi co it nhat 2 mau count tang theo thoi gian:
+   - InDecal: so pass tang.
+   - CNC: quang duong cat tang.
+   - Cong thuc: `remaining = (total - current_count) * elapsed_ms / gained_count`.
+5. Mau ETA duoc luu o browser `localStorage` key `qlx_running_eta_samples_v2`, de reload trang khong mat lich su mau gan nhat.
+6. Neu may dang tam dung (`PAUSED`, `PAUSE`, `is_paused`), Dashboard hien `tam dung`, xoa mau ETA cua job do, va khong hien thoi gian con lai.
+7. Neu chua du mau count tang, hien `dang tinh thoi gian`, khong hien so phut doan.
+8. InBat dung cung huong voi InDecal khi PrintMon co `current_pass/total_pass`:
+   - `%` that = `current_pass / total_pass * 100`.
+   - ETA lay theo mau pass tang dan, toi thieu 2 mau.
+   - Neu chua co pass, pass khong tang, hoac may dung/tam dung thi khong doan ETA.
+9. `%` dang chay cua InDecal/CNC la `%` that tu may/log. Chu `uoc tinh` chi dung cho tien do loi/huy khi khong co tin hieu that.
+
 ### In lai va so luong dung
 
 1. Ten co `_x2`, `_x5`, `_SL`, `_xSL` la so luong dung neu so lan in bang so do.
@@ -318,3 +340,99 @@ m2_hong_uoc_tinh / (m2_hoan_thanh + m2_hong_uoc_tinh) * 100
    - So sanh `machine_meta_json.area_m2`, kich thuoc that trong meta, va m2 parse tu ten file.
    - Neu chenh lech lon, sua parser/rule chung va them test bang file that.
    - Chay lai `/api/stats` de doi chieu top khach, chi so khach, va bieu do drill-down.
+
+## Quyet dinh bo sung ngay 2026-07-15 - Tien do va ETA InDecal/CNC
+
+0. InBat:
+   - Neu PrintMon co `current_pass/total_pass`, backend luu `printmon_current_pass/printmon_total_pass` de truy vet.
+   - `total_pass` hien thi phai chuan hoa theo chieu feed that, khong dung raw `PrintMon total_pass` neu no sai manh.
+   - Dashboard/ETA dung `current_pass / total_pass` sau khi da chuan hoa.
+   - Dashboard ETA dung count pass that tang dan, giong InDecal.
+   - Khi chua co du 2 mau pass tang, hien `dang tinh thoi gian`.
+   - Khi may dung/tam dung hoac pass khong tang, khong hien ETA doan.
+1. InDecal:
+   - Nguon `%` dung la `current_pass / total_pass` trong `machine_meta`.
+   - Dashboard ETA dung count that tang dan, khong uoc tinh theo thoi gian tu luc bat dau.
+   - Khi may `PAUSE`/tam dung, dashboard hien `tam dung` va xoa mau ETA cua job do.
+2. CNC:
+   - Khong dung `current_line / line_count` lam nguon chinh nua, vi moi dong TAP co do dai cat khac nhau.
+   - Bridge van doc `NCSTUDIO.DYN` de lay `current_line`.
+   - Bridge doc TAP that, parse segment XY dang cat, tinh:
+     - `current_path_length`: tong chieu dai segment co `line_no <= current_line`.
+     - `total_path_length`: tong chieu dai segment cat trong file.
+     - `progress_percent = current_path_length / total_path_length * 100`.
+   - `progress_source = cnc_tap_path` khi tinh duoc theo quang duong cat.
+   - Fallback `progress_source = cnc_dyn_line` chi dung khi khong tim/doc duoc TAP hoac TAP khong co segment hop le.
+3. ETA:
+   - Dashboard tinh ETA tu 2 mau count that tang dan.
+   - InDecal count la pass: `current_pass/total_pass`.
+   - CNC count la chieu dai cat: `current_path_length/total_path_length`.
+   - Truoc khi co du mau hien `dang tinh thoi gian`.
+4. Refresh UI:
+   - Dashboard van dung websocket cho event moi.
+   - Them poll `/api/data` moi 3 giay khi websocket dang mo de `%`/ETA nhay ma khong can reload browser.
+   - Preview da chon/pin khong duoc reposition lai theo card moi moi lan refresh; chi cap nhat noi dung neu file con dung hash.
+5. Thumbnail InBat/InDecal:
+   - Neu file co anh goc `.tif/.jpg/.jpeg`, dung anh goc truoc `.bmp` preview tu RIP.
+   - `.bmp` RIP chi la fallback khi khong co anh goc hop le.
+   - Thumb cu khong co marker source se duoc tao lai theo source uu tien moi.
+6. Test neo:
+   - `tests.test_tap_preview.TapPreviewTests.test_estimate_tap_path_progress_uses_cut_distance_not_line_count`.
+   - `tests.test_cnc_legacy_bridge.CncLegacyBridgeTests.test_dyn_progress_prefers_tap_path_distance_over_line_count`.
+   - Dashboard template test phai co `MACHINE_PROGRESS_POLL_MS = 3000` va uu tien `current_path_length/total_path_length`.
+6. Deploy ngay 2026-07-15:
+   - Dashboard live da co `MACHINE_PROGRESS_POLL_MS = 3000`.
+   - `\\192.168.1.188\AI\Tools\dist\Dashboard.exe` hash `534BA4B98D5213930CCFB172BD96FEA888031290A1EAA5BF0B76A9165EE32F0F`.
+   - `C:\QuanLyXuong\Dashboard_Local.exe` cung hash tren.
+   - `\\192.168.1.188\AI\Tools\dist\cnc_legacy_bridge.exe` hash `CE9A3CCD66CD081A9145D4E4FEBEA133186354FD327B246EDA97A3B2827AACD6`.
+   - Local `C:\QuanLyXuong\cnc_legacy_bridge.exe` chua doi duoc trong lan deploy nay vi process/service dang chay bang quyen khac, `Stop-Process`/`sc stop khoidongbot` bi `Access is denied`.
+   - Khi restart service `khoidongbot` bang quyen Admin hoac restart may chay runtime, bridge se can copy/chay ban moi trong `dist` de gui `cnc_tap_path`.
+
+## Quyet dinh bo sung ngay 2026-07-15 - Rollover file qua ngay moi
+
+1. Goc loi:
+   - App san xuat co luong van hanh chuyen file ton tu ngay cu sang thu muc ngay moi va doi ten `*_NgayDD`.
+   - Dashboard truoc do phai an row cu bang cach so khop ten/kich thuoc voi DONE muon hon, day chi la fallback cho du lieu lich su.
+   - Cach dung dung la ghi su kien ro rang tu luong move/rename, khong doan bang matching.
+2. Luong moi:
+   - Khi `sweep_old_files_to_today()` move file tu folder ngay cu sang folder hom nay, client gui 2 event:
+     - `ROLLOVER` voi `path` la path cu.
+     - `WRONG_DAY` voi `path` la path moi.
+   - `machine_meta` cua `ROLLOVER` gom:
+     - `rollover_source_path`, `rollover_source_name`.
+     - `rollover_target_path`, `rollover_target_name`.
+     - `rollover_old_date`, `rollover_new_date`, `rollover_reason = new_day`.
+3. Server:
+   - `ROLLOVER` khong tao row moi.
+   - Server tim row cu bang `file_path` hoac `file_name`, cap nhat status thanh `ROLLED_OVER`.
+   - History row cu them event `Chuyen qua ngay moi` va gan path/name moi.
+   - Row ngay moi van do `WRONG_DAY` tao, tiep tuc quan ly nhu hang cho hom nay.
+4. Dashboard:
+   - `ROLLED_OVER` khong nam trong cac query `EXPORTED/RIP/PRINTING/CUTTING/PAUSE/DONE/DELETED`, nen row ngay cu tu bien mat khoi hang cho/loi.
+   - Fallback so khop later DONE giu lai chi de don du lieu lich su truoc khi co event `ROLLOVER`.
+5. Test neo:
+   - `tests.test_quanlyxuong_scan.QuanLyXuongScanTests.test_sweep_old_files_emits_explicit_rollover_before_new_day_row`.
+   - `tests.test_server_reprint_noise.ServerReprintNoiseTests.test_rollover_marks_previous_day_row_and_keeps_new_day_row_separate`.
+6. Build/deploy ngay 2026-07-15:
+   - `dist-auto-update` da build moi day du; manifest OK.
+   - `dist\server.exe` da cap nhat de lan restart runtime sau lay server co logic `ROLLOVER`.
+   - `dist\QuanLyXuong.exe` dang bi process khac giu lock nen chua copy duoc; `dist-auto-update\QuanLyXuong.exe` la nguon auto-update moi cho may tram.
+   - Restart live `server_Local` bang script bi `Access is denied`; can restart runtime/NSSM bang quyen Admin de server live nhan logic moi ngay lap tuc.
+
+## Quyet dinh bo sung ngay 2026-07-15 - Tab Loi / thao tac
+
+1. Goc loi:
+   - API tra dung `CANCELED`, `REMOVED`, `PROBLEM`.
+   - Frontend `sanitizeBoardData()` loc mat `production_cancel` vi thay DONE muon hon, trong khi badge van lay tu `COUNTS`, nen badge `Loi 2` nhung list rong/le.
+2. Quy tac moi:
+   - `production_cancel` la loi san xuat that, khong duoc an bang rule cleanup/later DONE.
+   - Sau khi frontend loc cleanup, phai dong bo lai:
+     - `COUNTS.CANCELED = CANCELED.length`.
+     - `COUNTS.REMOVED = REMOVED.length`.
+     - `COUNTS.PROBLEM = COUNTS.CANCELED + COUNTS.REMOVED`.
+3. Test neo:
+   - `tests.test_dashboard_v2_status.DashboardV2StatusTests.test_board_sanitize_keeps_real_production_cancel_visible`.
+4. Kiem live sau deploy:
+   - `/api/data?limit=20`: `CANCELED=2`, `REMOVED=4`, `PROBLEM=6`.
+   - Browser: tab `Loi / thao tac` hien 6 card, tab `Huy` hien 4 card, tab `Loi` hien 2 card.
+   - `Dashboard.exe` hash live: `0C3E80F625BAAD38918CABC9E7B2EA6022DC01C3E634D32EF6429EF3A222794C`.

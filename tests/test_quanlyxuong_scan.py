@@ -85,6 +85,27 @@ class QuanLyXuongScanTests(unittest.TestCase):
         self.assertIn(export_path, scan)
         self.assertIn(rip_path, scan)
 
+    def test_indecal_print_log_resolves_ready_rip_from_tem_folder(self):
+        class FakeOutbox:
+            def __init__(self):
+                self.payloads = []
+
+            def enqueue(self, payload):
+                self.payloads.append(payload)
+                return "evt-ready-rip"
+
+        QuanLyXuong.ROOT = self.temp_dir.name
+        QuanLyXuong.MACHINE_NAME = "indecal"
+        QuanLyXuong.MACHINE_DISPLAY = "InDecal"
+        fake = FakeOutbox()
+        QuanLyXuong.OUTBOX = fake
+        QuanLyXuong.log_system = lambda *args, **kwargs: None
+        ready_rip = self.make_file("Tem", "Bevang1.prn")
+
+        QuanLyXuong.process_event("Bevang1.prn", "PRINTING")
+
+        self.assertEqual(fake.payloads[0]["path"].lower(), ready_rip)
+
     def test_cnc_scan_collects_root_and_new_folder_cut_files(self):
         QuanLyXuong.ROOT = self.temp_dir.name
         QuanLyXuong.MACHINE_NAME = "cnc"
@@ -118,7 +139,29 @@ class QuanLyXuongScanTests(unittest.TestCase):
 
         self.assertEqual(captured[0], ("EXPORT", export_path))
         self.assertEqual(captured[1], ("DELETE", export_path))
-        self.assertEqual(cur_date, day)
+
+    def test_sweep_old_files_emits_explicit_rollover_before_new_day_row(self):
+        QuanLyXuong.ROOT = self.temp_dir.name
+        QuanLyXuong.MACHINE_NAME = "cnc"
+        QuanLyXuong.processed_set = set()
+        QuanLyXuong.recent_moved = {}
+        captured = []
+
+        def capture_event(path, event_type, **kwargs):
+            captured.append((event_type, path, kwargs))
+
+        QuanLyXuong.process_event = capture_event
+        old_path = self.make_file("2026-07-14", "loi_f8_120x29.tap")
+
+        QuanLyXuong.sweep_old_files_to_today()
+
+        today = date.today().strftime("%Y-%m-%d")
+        new_path = os.path.join(self.temp_dir.name, today, "loi_f8_120x29_Ngay14.tap").lower()
+        self.assertTrue(os.path.exists(new_path))
+        self.assertEqual([event[0] for event in captured], ["ROLLOVER", "WRONG_DAY"])
+        self.assertEqual(captured[0][1].lower(), old_path)
+        self.assertEqual(captured[0][2]["machine_meta_extra"]["rollover_target_path"].lower(), new_path)
+        self.assertEqual(captured[1][1].lower(), new_path)
 
     def test_indecal_scan_once_emits_rip_only_after_meta_rename(self):
         QuanLyXuong.ROOT = self.temp_dir.name
@@ -178,8 +221,14 @@ class QuanLyXuongScanTests(unittest.TestCase):
 
         self.assertEqual(QuanLyXuong.find_thumbnail_source(rip_path), export_path)
 
-    def test_thumbnail_source_for_rip_prefers_rip_generated_bmp(self):
-        self.make_file(self.day, "balong_80x10.tif")
+    def test_thumbnail_source_for_rip_prefers_original_image_before_generated_bmp(self):
+        export_path = self.make_file(self.day, "balong_80x10.tif")
+        rip_path = self.make_file(self.day, "New Folder", "9~balong_80x10.prn")
+        self.make_file(self.day, "New Folder", "9~balong_80x10.prn.bmp")
+
+        self.assertEqual(QuanLyXuong.find_thumbnail_source(rip_path), export_path)
+
+    def test_thumbnail_source_for_rip_uses_generated_bmp_when_original_missing(self):
         rip_path = self.make_file(self.day, "New Folder", "9~balong_80x10.prn")
         bmp_path = self.make_file(self.day, "New Folder", "9~balong_80x10.prn.bmp")
 

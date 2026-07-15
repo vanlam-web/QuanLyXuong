@@ -5,6 +5,17 @@ import sqlite3, os, sys, json, requests, re, unicodedata, time, threading, subpr
 from flask import Flask, render_template_string, jsonify, request, send_from_directory, Response
 from datetime import datetime, timedelta
 from qlx_config import BASE_DATA_CRM, DASHBOARD_HOST, DASHBOARD_PORT, DB_DIR, NAS_DASHBOARD_EXE_PATH, SERVER_BROADCAST_URL
+from qlx_workstation_logic import normalize_inbat_feed_progress, parse_inbat_printmon_snapshot
+from tap_preview import find_existing_tap, render_tap_progress_preview_bytes
+from machine_file_meta import collect_machine_file_meta_for_server, find_machine_thumbnail_source, find_thumbnail_source
+
+try:
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    HAS_PIL = True
+except Exception:
+    Image = None
+    HAS_PIL = False
 
 app = Flask(__name__)
 
@@ -14,6 +25,13 @@ ADMIN_PIN = os.getenv("DASHBOARD_ADMIN_PIN", "").strip()
 
 THUMB_DIR = os.path.join(DB_DIR, "Thumbnails")
 os.makedirs(THUMB_DIR, exist_ok=True)
+CNC_PROGRESS_THUMB_DIR = os.path.join(THUMB_DIR, "cnc_progress")
+os.makedirs(CNC_PROGRESS_THUMB_DIR, exist_ok=True)
+TAP_PREVIEW_CACHE_VERSION = "v2"
+INBAT_PRINTFILE_PATHS = (
+    r"\\InBat\C\Program Files (x86)\PrintMon USB3.0 510 508GS 1020\PrintFile.ini",
+    r"\\INBAT\C\Program Files (x86)\PrintMon USB3.0 510 508GS 1020\PrintFile.ini",
+)
 
 def dashboard_public_dir():
     if getattr(sys, "frozen", False):
@@ -32,6 +50,7 @@ LOG_FILE = r"C:\QuanLyXuong\Dashboard_Log.txt"
 SERVER_LOG_FILE = r"C:\QuanLyXuong\Server_Log.txt"
 MACHINE_LOG_FILE = r"C:\QuanLyXuong\system_log.txt"
 QCVL_BRIDGE_LOG_FILE = r"C:\QuanLyXuong\QCVL_Bridge_Log.txt"
+SYSTEM_LOG_TAIL_LINES = 200
 
 def print_log(msg):
     log_str = f"[{now()}] {msg}"
@@ -93,6 +112,42 @@ def parse_machine_meta_json(value):
     except Exception:
         return {}
 
+def has_real_size_meta(meta):
+    data = parse_machine_meta_json(meta)
+    try:
+        width_cm = safe_float(data.get("width_cm") or 0) or safe_float(data.get("width_mm") or 0) / 10.0
+        height_cm = safe_float(data.get("height_cm") or 0) or safe_float(data.get("height_mm") or 0) / 10.0
+        return width_cm > 0 and height_cm > 0
+    except Exception:
+        return False
+
+_machine_meta_refresh_cache = {}
+
+def refresh_item_machine_meta_from_server(item):
+    if not isinstance(item, dict) or has_real_size_meta(item.get("machine_meta")):
+        return item
+    machine = item.get("machine")
+    file_path = item.get("file_path") or item.get("path") or ""
+    file_name = item.get("name") or ""
+    event_time = item.get("updated") or item.get("created") or ""
+    cache_key = (str(machine or ""), str(file_path or ""), str(file_name or ""), str(event_time or ""))
+    if cache_key in _machine_meta_refresh_cache:
+        fresh_meta = _machine_meta_refresh_cache[cache_key]
+    else:
+        try:
+            fresh_meta = collect_machine_file_meta_for_server(machine, file_path, file_name, event_time)
+        except Exception:
+            fresh_meta = {}
+        _machine_meta_refresh_cache[cache_key] = fresh_meta
+    if not fresh_meta:
+        return item
+    meta = parse_machine_meta_json(item.get("machine_meta"))
+    meta.update(fresh_meta)
+    if str(machine or "") == "InBat":
+        normalize_inbat_feed_progress(meta)
+    item["machine_meta"] = meta
+    return item
+
 def area_from_machine_meta(meta):
     data = parse_machine_meta_json(meta)
     try:
@@ -110,6 +165,65 @@ def safe_float(value, default=0.0):
     except (TypeError, ValueError):
         return default
 
+def clear_finished_progress_state(item):
+    if not isinstance(item, dict):
+        return item
+    for key in ("progress_percent", "progress_source", "progress_label", "estimated_bad_m2"):
+        item.pop(key, None)
+    meta = parse_machine_meta_json(item.get("machine_meta"))
+    for key in ("progress_percent", "progress_source", "current_pass", "total_pass", "current_line", "line_count", "progress_signal_time"):
+        meta.pop(key, None)
+    item["machine_meta"] = meta
+    return item
+
+_inbat_live_progress_cache = {"time": 0.0, "event": None}
+
+def read_live_inbat_print_event(cache_seconds=1.0):
+    now_ts = time.time()
+    if now_ts - _inbat_live_progress_cache.get("time", 0.0) < cache_seconds:
+        return _inbat_live_progress_cache.get("event")
+    event = None
+    for printfile_path in INBAT_PRINTFILE_PATHS:
+        try:
+            with open(printfile_path, "rb") as f:
+                raw = f.read(4096)
+            event, _state = parse_inbat_printmon_snapshot(raw, None, None)
+            break
+        except Exception:
+            continue
+    _inbat_live_progress_cache["time"] = now_ts
+    _inbat_live_progress_cache["event"] = event
+    return event
+
+def apply_live_print_progress(item):
+    if not isinstance(item, dict) or item.get("machine") != "InBat" or item.get("status") != "PRINTING":
+        return item
+    event = read_live_inbat_print_event()
+    if not event or len(event) < 3:
+        return item
+    live_status, live_path, meta = event[0], event[1], event[2]
+    if live_status != "PRINTING" or not isinstance(meta, dict):
+        return item
+    live_name = os.path.basename(str(live_path or "")).lower()
+    item_name = str(item.get("name") or "").lower()
+    if live_name and item_name and live_name != item_name:
+        return item
+    item_meta = item.get("machine_meta")
+    if not isinstance(item_meta, dict):
+        item_meta = {}
+    item_meta.update(meta)
+    normalize_inbat_feed_progress(item_meta)
+    item["machine_meta"] = item_meta
+    return item
+
+def normalize_running_item_progress(item):
+    if not isinstance(item, dict) or str(item.get("machine") or "") != "InBat":
+        return item
+    meta = parse_machine_meta_json(item.get("machine_meta"))
+    normalize_inbat_feed_progress(meta)
+    item["machine_meta"] = meta
+    return item
+
 def machine_meta_select_expr(conn):
     try:
         cols = [col[1] for col in conn.execute("PRAGMA table_info(files)").fetchall()]
@@ -118,6 +232,59 @@ def machine_meta_select_expr(conn):
     except Exception:
         pass
     return "'{}' AS machine_meta_json"
+
+def normalized_production_name(file_name):
+    name = os.path.splitext(str(file_name or ""))[0].strip().lower()
+    name = re.sub(r"[\s._-]*(?:ngay|ngày)\s*\d{1,2}$", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"[\s._-]*\d{1,2}$", "", name)
+    return name
+
+def machine_meta_size_signature(machine_meta_json):
+    meta = parse_machine_meta_json(machine_meta_json)
+    width_mm = safe_float(meta.get("width_mm") or meta.get("width_cm") or 0)
+    height_mm = safe_float(meta.get("height_mm") or meta.get("height_cm") or 0)
+    if width_mm and width_mm < 1000:
+        width_mm *= 10.0
+    if height_mm and height_mm < 1000:
+        height_mm *= 10.0
+    if width_mm <= 0 or height_mm <= 0:
+        return None
+    return (round(width_mm, 1), round(height_mm, 1))
+
+def board_row_is_resolved_by_later_done(machine, row, later_done_rows, allow_source_lookup=True):
+    if not row or str(row[3] or "").upper() == "DONE":
+        return False
+    row_name = str(row[1] or "").strip().lower()
+    row_norm = normalized_production_name(row_name)
+    row_path = str(row[2] or "")
+    row_meta = row[9] if len(row) > 9 else None
+    row_size = machine_meta_size_signature(row_meta)
+    row_updated = str(row[5] or "")
+    source_missing = True
+    if allow_source_lookup:
+        try:
+            if str(machine or "").upper() == "CNC":
+                source_missing = not bool(find_existing_tap(row_path))
+        except Exception:
+            source_missing = True
+    for done in later_done_rows:
+        done_name = str(done[1] or "").strip().lower()
+        if not done_name:
+            continue
+        if str(done[5] or "") <= row_updated:
+            continue
+        done_norm = normalized_production_name(done_name)
+        same_name = row_name == done_name or (row_norm and row_norm == done_norm)
+        same_size = False
+        if not same_name and str(machine or "").upper() == "CNC" and (source_missing or not allow_source_lookup):
+            done_size = machine_meta_size_signature(done[9] if len(done) > 9 else None)
+            same_size = bool(row_size and done_size and abs(row_size[0] - done_size[0]) <= 2 and abs(row_size[1] - done_size[1]) <= 2)
+        if same_name or same_size:
+            return True
+    return False
+
+def filter_rows_resolved_by_later_done(machine, rows, later_done_rows, allow_source_lookup=True):
+    return [row for row in rows if not board_row_is_resolved_by_later_done(machine, row, later_done_rows, allow_source_lookup=allow_source_lookup)]
 
 def parse_expected_runs(filename):
     name = os.path.splitext(str(filename or ""))[0]
@@ -155,6 +322,31 @@ def classify_reprint(file_name, run_count):
         "needs_review": needs_review,
         "label": "Cần xác nhận in lại" if needs_review else ("Đúng số lượng" if has_explicit_qty else ""),
     }
+
+def confirmed_reprint_runs(history_data, actual_runs):
+    try:
+        actual = max(int(actual_runs or 1), 1)
+    except (TypeError, ValueError):
+        actual = 1
+    for item in reversed(load_history(history_data)):
+        if str(item.get("event") or "").upper() != "ADMIN_CONFIRM_RUNS":
+            continue
+        try:
+            confirmed = max(int(item.get("confirmed_runs") or 0), 0)
+        except (TypeError, ValueError):
+            confirmed = 0
+        if confirmed >= actual:
+            return confirmed
+    return 0
+
+def apply_reprint_run_confirmation(item, history_data):
+    confirmed = confirmed_reprint_runs(history_data, item.get("run"))
+    if not confirmed:
+        return item
+    action_text = "Cắt" if item.get("machine") == "CNC" else "In"
+    item["reprint_needs_review"] = False
+    item["reprint_label"] = f"Đã xác nhận {action_text} x{confirmed} đúng"
+    return item
 
 def classify_active_reprint(history_data, has_done_before=False, file_name=""):
     history = load_history(history_data)
@@ -239,6 +431,19 @@ def active_start_time(history_data, fallback_updated_time):
         if str(item.get("status") or "").upper() in {"PRINTING", "CUTTING"}:
             return parse_event_time(item.get("time"))
     return parse_event_time(fallback_updated_time)
+
+def is_active_paused(history_data):
+    history = load_history(history_data)
+    for item in reversed(history):
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").upper()
+        event = str(item.get("event") or "").upper()
+        if status == "PAUSED" or event == "PAUSE":
+            return True
+        if status in {"PRINTING", "CUTTING", "DONE", "DELETED"}:
+            return False
+    return False
 
 def find_later_machine_run(rows, current_name, active_time):
     if not active_time:
@@ -417,12 +622,55 @@ def active_progress_label(machine_meta):
     meta = machine_meta if isinstance(machine_meta, dict) else parse_machine_meta_json(machine_meta)
     try:
         progress = meta.get("progress_percent")
+        current_line = safe_float(meta.get("current_line"))
+        line_count = safe_float(meta.get("line_count"))
+        current_pass = safe_float(meta.get("current_pass"))
+        total_pass = safe_float(meta.get("total_pass"))
+        if progress is None and current_pass > 0 and total_pass > 0:
+            progress = current_pass * 100.0 / total_pass
         if progress is None:
+            if current_line > 0 and line_count > 0:
+                return f"Dòng {int(current_line):,}/{int(line_count):,}".replace(",", ".")
+            if current_pass > 0 and total_pass > 0:
+                return f"Bước in {int(current_pass)}/{int(total_pass)}"
             return ""
         percent = max(0, min(100, int(round(float(progress)))))
+        if current_line > 0 and line_count > 0:
+            return f"Tiến độ: {percent}% | Dòng {int(current_line):,}/{int(line_count):,}".replace(",", ".")
+        if current_pass > 0 and total_pass > 0:
+            return f"Tiến độ: {percent}% | Bước in {int(current_pass)}/{int(total_pass)}"
         return f"Tiến độ: {percent}%"
     except Exception:
         return ""
+
+def cnc_current_line(machine_meta):
+    meta = machine_meta if isinstance(machine_meta, dict) else parse_machine_meta_json(machine_meta)
+    try:
+        line = int(float(meta.get("current_line") or 0))
+        return line if line > 0 else None
+    except Exception:
+        return None
+
+def cnc_progress_cache_line(current_line, bucket_size=1000):
+    try:
+        line = int(float(current_line or 0))
+        bucket = int(bucket_size or 1000)
+    except Exception:
+        return None
+    if line <= 0:
+        return None
+    bucket = max(bucket, 1)
+    return max(bucket, ((line + bucket // 2) // bucket) * bucket)
+
+def attach_cnc_progress_preview(item, status=None):
+    if item.get("machine") != "CNC" or not item.get("hash"):
+        return
+    if status not in ("PRINTING", "CUTTING", "PAUSE", "DELETED"):
+        return
+    current_line = cnc_current_line(item.get("machine_meta"))
+    if current_line:
+        cache_line = cnc_progress_cache_line(current_line) or current_line
+        item["preview_url"] = f"/cnc-progress-thumb/{item['hash']}.jpg?v={TAP_PREVIEW_CACHE_VERSION}-{cache_line}"
 
 def estimate_tap_line_progress(elapsed_seconds, line_count):
     lines = safe_float(line_count)
@@ -532,7 +780,11 @@ def filter_removed_items_with_later_done(removed_items, done_items):
 
     filtered = []
     for item in removed_items or []:
-        if str(item.get("cancel_type") or "").lower() in {"source_renamed_done", "done_cleanup"}:
+        cancel_type = str(item.get("cancel_type") or "").lower()
+        if cancel_type in {"source_renamed_done", "done_cleanup"}:
+            continue
+        if cancel_type == "production_cancel":
+            filtered.append(item)
             continue
         machine = str(item.get("machine") or "").lower()
         removed_time = str(item.get("updated") or "")
@@ -607,6 +859,65 @@ def build_attention_items(data):
             add("Thiếu ảnh preview", "info", file_obj, missing_thumbnail_reason(file_obj))
 
     return items[:20]
+
+def production_cancel_item_from_done_history(item, completed_samples):
+    if not isinstance(item, dict) or str(item.get("status") or "").upper() != "DONE":
+        return None
+    if is_cnc_expected_stop(item.get("machine"), item.get("name")):
+        return None
+
+    history = load_history(item.get("history"))
+    last_match = None
+    last_match_index = -1
+    previous_status = ""
+    ignore_types = {"source_delete", "done_cleanup", "source_renamed_done", "admin_delete", "legacy_close", "unknown_delete"}
+    for index, event in enumerate(history):
+        if not isinstance(event, dict):
+            continue
+        status = str(event.get("status") or "").upper()
+        if status == "DELETED":
+            cancel_type = str(event.get("cancel_type") or "").strip().lower()
+            old_status = str(event.get("old_status") or previous_status or "").upper()
+            event_name = str(event.get("event") or "").upper()
+            if event_name == "ADMIN_DELETE":
+                cancel_type = "admin_delete"
+            if cancel_type == "production_cancel" or (not cancel_type and old_status in {"PRINTING", "CUTTING"}):
+                last_match = event
+                last_match_index = index
+            elif old_status in {"PRINTING", "CUTTING"} and cancel_type not in ignore_types:
+                last_match = event
+                last_match_index = index
+        if status:
+            previous_status = status
+
+    if not last_match:
+        return None
+
+    cancel_time = str(last_match.get("time") or item.get("updated") or "")
+    clone = dict(item)
+    clone["status"] = "DELETED"
+    clone["updated"] = cancel_time
+    clone["time_short"] = cancel_time.split(" ")[1] if " " in cancel_time else ""
+    clone["stage_key"] = "CANCELED"
+    clone["stage_label"] = "Lỗi"
+    clone["cancel_type"] = "production_cancel"
+    clone["cancel_reason"] = str(last_match.get("reason") or "").strip() or "Dừng/hủy khi đang chạy"
+    clone["is_production_error"] = True
+    history_until_cancel = history[:last_match_index + 1] if last_match_index >= 0 else history
+    progress_info = estimate_cancel_progress(
+        clone.get("name"),
+        json.dumps(history_until_cancel, ensure_ascii=False),
+        completed_samples,
+    )
+    clone.update(progress_info)
+    if clone.get("machine") == "CNC":
+        clone.pop("estimated_bad_m2", None)
+    return clone
+
+def append_production_cancel_from_done_history(result, item, completed_samples):
+    cancel_item = production_cancel_item_from_done_history(item, completed_samples)
+    if cancel_item:
+        result["CANCELED"].append(cancel_item)
 
 def classify_deleted_job(machine, file_name, history_data):
     history = load_history(history_data)
@@ -768,6 +1079,39 @@ def inspect_outbox_db(db_path):
         info["error"] = str(exc)
     return info
 
+def indecal_audit_paths(row):
+    paths = set()
+    for key in ("prn_path", "target_prn_path"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            paths.add(value.lower())
+    return paths
+
+def indecal_audit_is_success(row):
+    action = str(row.get("action") or "").upper()
+    return action.endswith("_OK")
+
+def indecal_audit_is_failure(row):
+    action = str(row.get("action") or "").upper()
+    if indecal_audit_is_success(row):
+        return False
+    return "FAIL" in action or bool(str(row.get("error") or "").strip())
+
+def count_unresolved_indecal_audit_failures(rows):
+    resolved_paths = set()
+    unresolved = 0
+    for row in reversed(rows):
+        paths = indecal_audit_paths(row)
+        if indecal_audit_is_success(row):
+            resolved_paths.update(paths)
+            continue
+        if not indecal_audit_is_failure(row):
+            continue
+        if paths and paths.intersection(resolved_paths):
+            continue
+        unresolved += 1
+    return unresolved
+
 def inspect_indecal_rename_audit(data_dir=DB_DIR, max_items=20):
     db_path = os.path.join(data_dir, "indecal_rename_audit.db")
     info = {
@@ -794,12 +1138,15 @@ def inspect_indecal_rename_audit(data_dir=DB_DIR, max_items=20):
         info["today"] = int(c.fetchone()[0])
         c.execute(
             """
-            SELECT COUNT(*) FROM rename_audit
-            WHERE DATE(event_time)=? AND (action LIKE '%FAIL%' OR COALESCE(error, '') <> '')
+            SELECT action, prn_path, target_prn_path, error, event_time
+            FROM rename_audit
+            WHERE DATE(event_time)=?
+            ORDER BY id ASC
             """,
             (today,),
         )
-        info["fail_today"] = int(c.fetchone()[0])
+        today_rows = [dict(row) for row in c.fetchall()]
+        info["fail_today"] = count_unresolved_indecal_audit_failures(today_rows)
         c.execute(
             """
             SELECT machine, action, prn_path, meta_path, target_prn_path, error, event_time
@@ -949,13 +1296,13 @@ def get_v2_status_snapshot(data_dir=DB_DIR):
         ("machine", MACHINE_LOG_FILE),
         ("qcvl_bridge", QCVL_BRIDGE_LOG_FILE),
     ]:
-        lines = read_tail_lines(path, 60)
+        lines = read_tail_lines(path, SYSTEM_LOG_TAIL_LINES)
         logs.append({
             "name": name,
             "path": path,
             "exists": os.path.exists(path),
             "error_count": count_log_errors(lines),
-            "tail": [line.rstrip("\n") for line in lines[-12:]],
+            "tail": [line.rstrip("\n") for line in lines[-SYSTEM_LOG_TAIL_LINES:]],
         })
 
     version_path = os.path.join(data_dir, "versions_tracking.json")
@@ -1105,14 +1452,15 @@ HTML_TEMPLATE = """
         .machine-card { background: #151515; border: 1px solid #333; border-radius: 8px; padding: 0; min-height: 0; overflow: hidden; }
         .machine-card.online { border-color: #00fa9a; }
         .machine-card.offline { border-color: #555; }
-        .machine-card summary { cursor: pointer; list-style: none; padding: 10px; }
+        .machine-card summary, .machine-card .machine-summary { cursor: pointer; list-style: none; padding: 10px; }
         .machine-card summary::-webkit-details-marker { display: none; }
         .machine-card .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 0; }
         .machine-card .line { display: flex; justify-content: space-between; gap: 8px; border-top: 1px solid #282828; padding-top: 6px; margin-top: 6px; font-size: 12px; }
         .machine-card .label { color: #aaa; }
         .machine-card .value { color: #fff; text-align: right; word-break: break-word; }
         .machine-main { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; margin-top: 8px; }
-        .machine-kpi { display: flex; gap: 8px; flex-wrap: wrap; color: #d6dce6; font-size: 11px; }
+        .machine-kpi { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; color: #d6dce6; font-size: 11px; }
+        .machine-kpi span { display: inline-flex; align-items: baseline; gap: 3px; line-height: 1.2; }
         .machine-kpi strong { color: #fff; font-size: 13px; }
         .machine-more { padding: 0 10px 10px; border-top: 1px solid #263044; }
         .machine-card summary::after { content: 'Chi tiết'; color: #93c5fd; display: block; margin-top: 8px; font-size: 11px; font-weight: 800; }
@@ -1172,7 +1520,8 @@ HTML_TEMPLATE = """
         .admin-section { display: none; margin-top: 15px; padding-top: 10px; border-top: 2px solid #444; }
         .admin-title { font-size: 11px; color: #ff3333; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; text-align: center;}
         .action-btn { display: block; width: 100%; padding: 8px; margin-bottom: 6px; border: none; border-radius: 5px; font-size: 12px; font-weight: bold; cursor: pointer;}
-        .btn-submit { background-color: #00ffcc; color: black; margin-top: 10px;} .btn-done { background-color: #33cc33; color: black;} .btn-cancel { background-color: #ff3333; color: white;} .btn-reset { background-color: #ff9900; color: black;}
+        .action-btn:disabled, .preview-action-btn:disabled { opacity: .55; cursor: wait; filter: grayscale(.25); }
+        .btn-submit { background-color: #00ffcc; color: black; margin-top: 10px;} .btn-done { background-color: #33cc33; color: black;} .btn-cancel { background-color: #ff3333; color: white;} .btn-reset { background-color: #ff9900; color: black;} .btn-confirm-runs { background-color: #3b82f6; color: white; }
 
         /* QUICK FILTER */
         .quick-select { background: #00ffcc !important; color: #000 !important; font-weight: bold; padding: 6px 12px !important; border-radius: 5px; cursor: pointer; border: 1px solid #00ffcc; outline: none; transition: 0.2s;}
@@ -1226,8 +1575,9 @@ HTML_TEMPLATE = """
         :root {
             --bg:#0f1115; --panel:#171a21; --panel2:#202634; --line:#303847; --text:#f3f6fb; --muted:#9aa4b2;
             --machine-inbat:#22c55e; --machine-indecal:#3b82f6; --machine-cnc:#ff6347;
-            --stage-export:#f5b84b; --stage-rip:#25c2e3; --stage-run:#6aa7ff; --stage-done:#20d489; --stage-cancel:#ef5b68; --stage-removed:#9aa4b2;
-            --green:var(--stage-done); --cyan:var(--stage-rip); --amber:var(--stage-export); --red:var(--stage-cancel); --blue:var(--stage-run);
+            --stage-export:#00a3ff; --stage-rip:#a855f7; --stage-run:#22c55e; --stage-pause:#f59e0b; --stage-done:#20d489; --stage-cancel:#ef5b68; --stage-removed:#9aa4b2;
+            --green:var(--stage-run); --cyan:var(--stage-rip); --amber:var(--stage-export); --red:var(--stage-cancel); --blue:var(--stage-export);
+            --ui-active-bg:#173154; --ui-active-border:#60a5fa; --ui-active-ink:#fff; --ui-active-shadow:#60a5fa;
         }
         * { box-sizing: border-box; }
         body { background: var(--bg); color: var(--text); height: 100vh; min-height: 100vh; overflow: hidden; padding: 16px; display: flex; flex-direction: column; letter-spacing: 0; }
@@ -1276,21 +1626,44 @@ HTML_TEMPLATE = """
         .count-badge { position: static; min-width: 24px; border-radius: 999px; font-weight: 900; }
         .list-container { padding: 6px; }
         .card { background: var(--panel2); border: 1px solid #2b3444; border-left: 5px solid #69758a; border-radius: 8px; transform: none !important; padding: 5px 6px 5px 8px; margin-bottom: 5px; position: relative; min-height: 34px; }
-        .card[data-machine="InBat"], .badge-InBat, .attention-item[data-machine="InBat"] { border-left-color: var(--machine-inbat); }
-        .card[data-machine="InDecal"], .badge-InDecal, .attention-item[data-machine="InDecal"] { border-left-color: var(--machine-indecal); }
-        .card[data-machine="CNC"], .badge-CNC, .attention-item[data-machine="CNC"] { border-left-color: var(--machine-cnc); }
+        .badge-InBat, .attention-item[data-machine="InBat"] { border-left-color: var(--machine-inbat); }
+        .badge-InDecal, .attention-item[data-machine="InDecal"] { border-left-color: var(--machine-indecal); }
+        .badge-CNC, .attention-item[data-machine="CNC"] { border-left-color: var(--machine-cnc); }
+        .card.stage-export { border-color: color-mix(in srgb, var(--stage-export) 58%, var(--line)); border-left-color: var(--stage-export); }
+        .card.stage-rip { border-color: color-mix(in srgb, var(--stage-rip) 58%, var(--line)); border-left-color: var(--stage-rip); }
+        .card.stage-run { border-color: color-mix(in srgb, var(--stage-run) 58%, var(--line)); border-left-color: var(--stage-run); }
+        .card.stage-pause { border-color: color-mix(in srgb, var(--stage-pause) 62%, var(--line)); border-left-color: var(--stage-pause); }
+        .card.stage-done { border-color: color-mix(in srgb, var(--stage-done) 58%, var(--line)); border-left-color: var(--stage-done); }
+        .card.stage-cancel { border-color: color-mix(in srgb, var(--stage-cancel) 58%, var(--line)); border-left-color: var(--stage-cancel); }
+        .card.stage-removed { border-color: color-mix(in srgb, var(--stage-removed) 58%, var(--line)); border-left-color: var(--stage-removed); }
         .card:hover, .card:focus-within { background: #252d3a; border-color: #51607a; z-index: 5; }
         .card-main { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; }
-        .card-title { font-size: 11px; line-height: 1.15; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+        .card-title { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; line-height: 1.15; margin: 0; white-space: nowrap; overflow: hidden; min-width: 0; }
+        .card-title .machine-icon { width: 15px; height: 15px; flex-basis: 15px; }
+        .card-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        .card-real-size { color: #86efac; font-weight: 950; flex-shrink: 0; }
+        .card.stage-done .card-name { color: #86efac; }
         .card-time { font-size: 10px; color: var(--muted); white-space: nowrap; }
         .stage-chip { font-size: 9px; line-height: 1; color: #d6dce6; background: #11161f; border: 1px solid var(--line); border-radius: 999px; padding: 3px 5px; white-space: nowrap; }
+        .stage-chip.stage-export { color: #c7ecff; background: rgba(0,163,255,.12); border-color: color-mix(in srgb, var(--stage-export) 62%, var(--line)); }
+        .stage-chip.stage-rip { color: #e9d5ff; background: rgba(168,85,247,.12); border-color: color-mix(in srgb, var(--stage-rip) 62%, var(--line)); }
+        .stage-chip.stage-run { color: #bbf7d0; background: rgba(34,197,94,.12); border-color: color-mix(in srgb, var(--stage-run) 62%, var(--line)); }
+        .stage-chip.stage-pause { color: #fde68a; background: rgba(245,158,11,.13); border-color: color-mix(in srgb, var(--stage-pause) 66%, var(--line)); }
+        .stage-chip.stage-done { color: #b8ffe2; background: rgba(32,212,137,.12); border-color: color-mix(in srgb, var(--stage-done) 62%, var(--line)); }
+        .stage-chip.stage-cancel { color: #fecdd3; background: rgba(239,91,104,.12); border-color: color-mix(in srgb, var(--stage-cancel) 62%, var(--line)); }
+        .stage-chip.stage-removed { color: #e2e8f0; background: rgba(148,164,178,.12); border-color: color-mix(in srgb, var(--stage-removed) 62%, var(--line)); }
         .card-progress { margin-top: 4px; font-size: 10px; color: #fbbf24; line-height: 1.25; }
         .card-progress strong { color: #fde68a; }
         .card-extra { display: none; }
         .card-thumb { display: none; }
-        .card-preview { position: absolute; display: none; z-index: 2500; width: 320px; max-width: calc(100vw - 24px); max-height: calc(100vh - 16px); background: #0b0d11; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 16px 44px rgba(0,0,0,.55); padding: 8px; pointer-events: none; overflow: hidden; }
+        .card-preview { position: fixed; display: none; z-index: 2500; width: 320px; max-width: calc(100vw - 24px); max-height: calc(100vh - 16px); background: #0b0d11; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 16px 44px rgba(0,0,0,.55); padding: 8px; pointer-events: none; overflow: hidden; }
         .card-preview.pinned { pointer-events: auto; overflow-y: auto; overscroll-behavior: contain; }
-        .card-preview img { width: 100%; max-height: 240px; object-fit: contain; border-radius: 6px; background: #11161f; display: block; }
+        .preview-image-wrap { position: relative; display: block; width: fit-content; max-width: 100%; margin: 0 auto; border-radius: 6px; overflow: hidden; background: #11161f; --print-progress: 0%; }
+        .card-preview img { width: auto; height: auto; max-width: 100%; max-height: 240px; object-fit: contain; border-radius: 6px; background: #11161f; display: block; }
+        .preview-print-progress { display: none; position: absolute; inset: 0; pointer-events: none; border-radius: 6px; overflow: hidden; }
+        .preview-print-progress.active { display: block; }
+        .preview-progress-unprinted { position: absolute; left: 0; right: 0; top: var(--print-progress); bottom: 0; background: rgba(5, 8, 13, .48); backdrop-filter: grayscale(1); }
+        .preview-progress-line { position: absolute; left: 0; right: 0; top: var(--print-progress); height: 2px; transform: translateY(-1px); background: #22c55e; box-shadow: 0 0 0 1px rgba(4, 10, 6, .75), 0 0 12px rgba(34,197,94,.75); }
         .card-preview-empty { display: none; min-height: 120px; align-items: center; justify-content: center; text-align: center; color: var(--muted); background: #11161f; border: 1px dashed #334155; border-radius: 6px; font-size: 12px; }
         .card-preview-details { display: none; margin-top: 8px; border-top: 1px solid #1f2937; padding-top: 8px; }
         .card-preview.pinned .card-preview-details { display: block; }
@@ -1377,8 +1750,40 @@ HTML_TEMPLATE = """
         .compact-sidebar .machine-card[data-machine="InBat"] { border-left-color: var(--machine-inbat); }
         .compact-sidebar .machine-card[data-machine="InDecal"] { border-left-color: var(--machine-indecal); }
         .compact-sidebar .machine-card[data-machine="CNC"] { border-left-color: var(--machine-cnc); }
+        .compact-sidebar .machine-card { cursor: default; }
+        .compact-sidebar .machine-card.has-running { cursor: pointer; }
+        .compact-sidebar .machine-card.is-running {
+            animation: machine-running-pulse 1.15s ease-in-out infinite;
+        }
+        .machine-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+        .machine-status-kpi { display: inline-flex; align-items: center; gap: 4px; padding: 0; font-size: 11px; line-height: 1.1; font-weight: 950; white-space: nowrap; }
+        .machine-status-kpi strong { color: inherit; font-size: 13px; }
+        .machine-status-kpi.is-running { color: #bbf7d0; }
+        .machine-status-kpi.is-paused { color: #fde68a; }
+        .machine-status-icon { display: inline-flex; align-items: center; justify-content: center; width: 12px; font-size: 10px; }
+        .machine-status-kpi.is-running .machine-status-icon { animation: machine-status-icon-pulse 1.1s ease-in-out infinite; }
+        .machine-status-kpi.is-updated { animation: machine-status-flash .9s ease-out 1; }
+        .machine-running-file { display: grid; gap: 4px; margin-top: 8px; padding-top: 7px; border-top: 1px solid rgba(148,163,184,.16); }
+        .machine-running-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e5f0ff; font-size: 11px; font-weight: 900; }
+        .machine-running-real-size { color: #86efac; font-weight: 950; }
+        .machine-running-size { color: #cbd5e1; font-weight: 850; }
+        .machine-running-eta { color: #fde68a; font-size: 10px; font-weight: 900; white-space: nowrap; }
+        .machine-running-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+        .machine-running-progress { height: 6px; border-radius: 999px; overflow: hidden; background: rgba(15,23,42,.9); border: 1px solid rgba(148,163,184,.22); }
+        .machine-running-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #22c55e, #86efac); }
+        @keyframes machine-running-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,.08), inset 0 0 0 1px rgba(34,197,94,.18); }
+            50% { box-shadow: 0 0 0 2px rgba(34,197,94,.22), 0 0 16px rgba(34,197,94,.16), inset 0 0 0 1px rgba(34,197,94,.36); }
+        }
+        @keyframes machine-status-icon-pulse {
+            0%, 100% { transform: scale(1); opacity: .85; }
+            50% { transform: scale(1.22); opacity: 1; }
+        }
+        @keyframes machine-status-flash {
+            0% { filter: brightness(1.9); transform: scale(1.04); }
+            100% { filter: brightness(1); transform: scale(1); }
+        }
         .compact-sidebar .machine-card .machine-more { display: none; }
-        .compact-sidebar .machine-card[open] .machine-more { display: block; padding: 0 8px 8px; }
         .compact-sidebar .erp-summary-row { display: grid; grid-template-columns: 1fr; gap: 7px; margin: 0; }
         .compact-sidebar .erp-summary-row .erp-sum-card { padding: 10px; text-align: left; }
         .compact-sidebar .erp-summary-row .total-summary-card {
@@ -1439,9 +1844,9 @@ HTML_TEMPLATE = """
             --control-h: 36px;
             --control-bg: #11161f;
             --control-bg-hover: #151c27;
-            --control-bg-active: #202634;
+            --control-bg-active: var(--ui-active-bg);
             --control-border: var(--line);
-            --control-border-active: #51607a;
+            --control-border-active: var(--ui-active-border);
             --machine-inbat-border: color-mix(in srgb, var(--machine-inbat) 55%, var(--line));
             --machine-indecal-border: color-mix(in srgb, var(--machine-indecal) 55%, var(--line));
             --machine-cnc-border: color-mix(in srgb, var(--machine-cnc) 55%, var(--line));
@@ -1471,7 +1876,7 @@ HTML_TEMPLATE = """
         .sidebar-head { min-height: 28px; margin-bottom: var(--space-3); }
         .sidebar-head h3, .chart-box h3, .chart-head h3 { color: #9fb0c8; font-size: var(--font-md); letter-spacing: 0; }
         .sidebar-machines, .customer-mini-list, .customer-full-list { gap: var(--space-2); }
-        .compact-sidebar .machine-card summary { padding: var(--space-3); }
+        .compact-sidebar .machine-card summary, .compact-sidebar .machine-card .machine-summary { padding: var(--space-3); }
         .machine-name, .card-title, .attention-title { letter-spacing: 0; }
         .machine-kpi { gap: var(--space-2); }
         .machine-kpi span { white-space: nowrap; }
@@ -1519,9 +1924,9 @@ HTML_TEMPLATE = """
             line-height: 16px;
         }
         .stage-tab.active {
-            color: #fff;
-            border-color: #60a5fa;
-            background: #173154;
+            color: var(--ui-active-ink);
+            border-color: var(--ui-active-border);
+            background: var(--ui-active-bg);
         }
         .stage-tab.active span {
             background: #eff6ff;
@@ -1689,7 +2094,7 @@ HTML_TEMPLATE = """
             background: var(--control-bg-active);
             border-color: var(--control-border-active);
             color: var(--text);
-            box-shadow: inset 0 -2px 0 #6aa7ff;
+            box-shadow: inset 0 -2px 0 var(--ui-active-shadow);
         }
         .card,
         .compact-sidebar .machine-card,
@@ -1697,36 +2102,27 @@ HTML_TEMPLATE = """
         .attention-item {
             border-left-width: 1px;
         }
-        .card[data-machine="InBat"],
         .compact-sidebar .machine-card[data-machine="InBat"],
         .stat-line.machine-InBat,
         .attention-item[data-machine="InBat"] {
             border-color: var(--machine-inbat-border);
         }
-        .card[data-machine="InDecal"],
         .compact-sidebar .machine-card[data-machine="InDecal"],
         .stat-line.machine-InDecal,
         .attention-item[data-machine="InDecal"] {
             border-color: var(--machine-indecal-border);
         }
-        .card[data-machine="CNC"],
         .compact-sidebar .machine-card[data-machine="CNC"],
         .stat-line.machine-CNC,
         .attention-item[data-machine="CNC"] {
             border-color: var(--machine-cnc-border);
         }
-        .card[data-machine="InBat"]:hover,
-        .card[data-machine="InBat"]:focus-within {
-            border-color: var(--machine-inbat);
-        }
-        .card[data-machine="InDecal"]:hover,
-        .card[data-machine="InDecal"]:focus-within {
-            border-color: var(--machine-indecal);
-        }
-        .card[data-machine="CNC"]:hover,
-        .card[data-machine="CNC"]:focus-within {
-            border-color: var(--machine-cnc);
-        }
+        .card.stage-export:hover, .card.stage-export:focus-within { border-color: var(--stage-export); }
+        .card.stage-rip:hover, .card.stage-rip:focus-within { border-color: var(--stage-rip); }
+        .card.stage-run:hover, .card.stage-run:focus-within { border-color: var(--stage-run); }
+        .card.stage-done:hover, .card.stage-done:focus-within { border-color: var(--stage-done); }
+        .card.stage-cancel:hover, .card.stage-cancel:focus-within { border-color: var(--stage-cancel); }
+        .card.stage-removed:hover, .card.stage-removed:focus-within { border-color: var(--stage-removed); }
         .compact-main {
             min-height: 0;
         }
@@ -1955,6 +2351,58 @@ HTML_TEMPLATE = """
             font-size: 10px;
             line-height: 1.2;
         }
+        .machine-power-toggle {
+            width: 34px;
+            height: 18px;
+            border-radius: 999px;
+            border: 1px solid rgba(148, 163, 184, .45);
+            background: rgba(71, 85, 105, .35);
+            display: inline-flex;
+            align-items: center;
+            padding: 2px;
+            flex: 0 0 auto;
+            box-shadow: inset 0 0 0 1px rgba(15, 23, 42, .35);
+        }
+        .machine-power-toggle::before {
+            content: '';
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #94a3b8;
+            box-shadow: 0 1px 4px rgba(0,0,0,.35);
+            transition: transform .18s ease, background .18s ease;
+        }
+        .machine-power-toggle.is-on {
+            background: rgba(34,197,94,.22);
+            border-color: rgba(34,197,94,.72);
+        }
+        .machine-power-toggle.is-on::before {
+            transform: translateX(14px);
+            background: #22c55e;
+        }
+        .machine-power-toggle.is-warn {
+            background: rgba(245,158,11,.2);
+            border-color: rgba(245,158,11,.7);
+        }
+        .machine-power-toggle.is-warn::before {
+            transform: translateX(14px);
+            background: #f59e0b;
+        }
+        .machine-power-toggle.is-active-running, .machine-power-toggle.is-paused-running {
+            width: auto;
+            height: auto;
+            border: 0;
+            background: transparent;
+            box-shadow: none;
+            padding: 0;
+            justify-content: center;
+            align-items: center;
+            border-radius: 0;
+            min-width: 0;
+            min-height: 0;
+        }
+        .machine-power-toggle.is-active-running::before { content: '▶'; width: auto; height: auto; border-radius: 0; background: transparent; box-shadow: none; transform: none; color: #22c55e; font-size: 16px; line-height: 1; }
+        .machine-power-toggle.is-paused-running::before { content: '⏸'; width: auto; height: auto; border-radius: 0; background: transparent; box-shadow: none; transform: none; color: #f59e0b; font-size: 16px; line-height: 1; }
         .status-pill {
             white-space: nowrap;
         }
@@ -2089,7 +2537,6 @@ HTML_TEMPLATE = """
                 <button id="tab-attention" class="main-tab" onclick="switchMainTab('attention')" title="Việc chờ xử lý">Chờ xử lý <span id="attentionTabCount">0</span></button>
                 <button id="tab-flow" class="main-tab" onclick="switchMainTab('flow')" title="Báo cáo khách hàng và đơn hàng">Báo cáo</button>
                 <button id="tab-system" class="main-tab" onclick="switchMainTab('system')" title="Log, outbox, phiên bản, trạng thái hệ thống">Hệ thống</button>
-                <button class="main-tab icon-only" onclick="exportExcel()" title="Xuất Excel" aria-label="Xuất Excel">⬇</button>
             </div>
 
             <section id="main-tab-production" class="main-tab-panel active">
@@ -2099,7 +2546,6 @@ HTML_TEMPLATE = """
                             <button id="queue-tab-all" class="stage-tab active" type="button" data-stage-key="QUEUE" onclick="setProductionQueueTab('QUEUE')">Hàng chờ <span id="count-queue-all">0</span></button>
                             <button id="queue-tab-export" class="stage-tab" type="button" data-stage-key="EXPORTED" onclick="setProductionQueueTab('EXPORTED')">Xuất <span id="count-queue-export">0</span></button>
                             <button id="queue-tab-rip" class="stage-tab" type="button" data-stage-key="RIP" onclick="setProductionQueueTab('RIP')">RIP <span id="count-queue-rip">0</span></button>
-                            <button id="queue-tab-running" class="stage-tab" type="button" data-stage-key="RUNNING" onclick="setProductionQueueTab('RUNNING')">Đang chạy <span id="count-queue-running">0</span></button>
                         </div>
                         <div id="queue-list" class="list-container"></div>
                     </div>
@@ -2211,12 +2657,19 @@ HTML_TEMPLATE = """
                 <button class="action-btn btn-done" onclick="forceUpdate('DONE')">Chuyển sang: Đã xong</button>
                 <button class="action-btn btn-cancel" onclick="forceUpdate('DELETED')">Chuyển sang: Xóa/Hủy</button>
                 <button class="action-btn btn-reset" onclick="forceUpdate('EXPORTED')">Chuyển sang: Xuất lại</button>
+                <button id="confirmRunsBtn" class="action-btn btn-confirm-runs" style="display:none;" onclick="confirmRuns()">Xác nhận In x đúng</button>
             </div>
         </div>
     </div>
 
     <div id="cardPreview" class="card-preview">
-        <img id="cardPreviewImg" alt="Ảnh in">
+        <div id="cardPreviewImageWrap" class="preview-image-wrap">
+            <img id="cardPreviewImg" alt="Ảnh in" decoding="async">
+            <div id="cardPreviewProgress" class="preview-print-progress" aria-hidden="true">
+                <div class="preview-progress-unprinted"></div>
+                <div class="preview-progress-line"></div>
+            </div>
+        </div>
         <div id="cardPreviewEmpty" class="card-preview-empty">Chưa có ảnh xem trước</div>
         <div id="cardPreviewDetails" class="card-preview-details">
             <div id="cardPreviewName" class="preview-name"></div>
@@ -2241,11 +2694,14 @@ HTML_TEMPLATE = """
         let dataRequestId = 0;
         let activeDataRequests = 0;
         let boardVisibleLimit = 20;
+        let boardResizeTimer = null;
         let statsFetchTimer = null;
         let statsDirty = true;
         let flowMetric = 'count';
         let selectedReportCustomer = '';
+        const BOARD_MIN_LIMIT = 20;
         const BOARD_PAGE_INCREMENT = 20;
+        const BOARD_MAX_AUTO_LIMIT = 100;
         const MACHINE_COLORS = {
             InBat: '#22c55e',
             InDecal: '#3b82f6',
@@ -2275,6 +2731,25 @@ HTML_TEMPLATE = """
 
         function machineLabel(machine, label) {
             return `<span class="machine-token">${machineIcon(machine)}<span>${escapeHtml(label || machine || '')}</span></span>`;
+        }
+
+        function stageClass(stageKey) {
+            const key = String(stageKey || '').toUpperCase();
+            const map = {
+                EXPORTED: 'stage-export',
+                EXPORT: 'stage-export',
+                RIP: 'stage-rip',
+                RUNNING: 'stage-run',
+                PRINTING: 'stage-run',
+                CUTTING: 'stage-run',
+                PAUSED: 'stage-pause',
+                DONE: 'stage-done',
+                CANCELED: 'stage-cancel',
+                CANCEL: 'stage-cancel',
+                REMOVED: 'stage-removed',
+                DELETED: 'stage-removed'
+            };
+            return map[key] || 'stage-removed';
         }
 
         function accountIconMarkup() {
@@ -2314,8 +2789,35 @@ HTML_TEMPLATE = """
             return [y, m, day].join('-');
         }
 
+        function cardSlotHeight(listEl) {
+            const card = listEl?.querySelector('.card');
+            if (!card) return window.innerWidth >= 1600 ? 40 : 44;
+            const rect = card.getBoundingClientRect();
+            const style = window.getComputedStyle(card);
+            const marginBottom = parseFloat(style.marginBottom || '0') || 0;
+            return Math.max(32, rect.height + marginBottom);
+        }
+
+        function estimateBoardVisibleLimit() {
+            const list = document.getElementById('done-compact-list')
+                || document.getElementById('queue-list')
+                || document.getElementById('problem-list');
+            const fallbackHeight = Math.max(390, window.innerHeight - (window.innerWidth <= 1200 ? 220 : 188));
+            const listHeight = Math.max(160, list?.clientHeight || fallbackHeight);
+            const slots = Math.ceil(listHeight / cardSlotHeight(list));
+            const buffer = window.innerHeight >= 1000 || window.innerWidth >= 1600 ? 8 : 5;
+            return Math.max(BOARD_MIN_LIMIT, Math.min(BOARD_MAX_AUTO_LIMIT, slots + buffer));
+        }
+
+        function ensureResponsiveBoardLimit() {
+            const needed = estimateBoardVisibleLimit();
+            if (needed <= boardVisibleLimit) return false;
+            boardVisibleLimit = needed;
+            return true;
+        }
+
         function applyGlobalFilters() {
-            boardVisibleLimit = BOARD_PAGE_INCREMENT;
+            boardVisibleLimit = estimateBoardVisibleLimit();
             fetchData();
             fetchV2Status();
             scheduleStatsFetch(currentMainTab === 'flow' ? 0 : 900);
@@ -2432,9 +2934,10 @@ HTML_TEMPLATE = """
                     <div class="overview-card"><div class="overview-label">Máy đã lên V2</div><div class="overview-value">${v2Count}/${machines.length || 0}</div><div class="overview-note">Bản V2.0.0_OUTBOX_READY</div></div>
                     <div class="overview-card"><div class="overview-label">Hàng chờ gửi</div><div class="overview-value ${pendingTotal ? 'version-old' : 'version-ok'}">${pendingTotal}</div><div class="overview-note">Sự kiện chưa gửi lên server</div></div>
                 `;
+                const machinePowerTitle = (m) => m.online ? 'Máy đang mở' : (m.network_online ? 'Máy bật - chưa có V2' : 'Máy chưa mở');
                 const machineCards = machines.map(m => {
                     const networkOnly = !m.online && m.network_online;
-                    const onlineClass = m.online ? 'pill-ok' : (networkOnly ? 'pill-warn' : 'pill-idle');
+                    const powerClass = m.online ? 'is-on' : (networkOnly ? 'is-warn' : 'is-off');
                     const cardClass = (m.online || networkOnly) ? 'online' : 'offline';
                     const version = m.version || 'chưa báo';
                     const hostName = String(m.hostname || '').trim();
@@ -2444,31 +2947,43 @@ HTML_TEMPLATE = """
                     const lastPing = m.last_ping ? `${escapeHtml(m.last_ping)} (${escapeHtml(formatAge(m.ping_age_seconds))})` : (networkOnly ? 'mạng thấy hostname/IP, chưa có heartbeat V2' : 'chưa thấy máy mở/ping');
                     const latestMachine = m.latest_machine_update || 'chưa có log máy';
                     const latestAdmin = m.latest_admin_update || 'chưa có thao tác web';
-                    const onlineText = m.online ? 'ĐANG MỞ' : (networkOnly ? 'MÁY BẬT - CHƯA V2' : 'CHƯA MỞ');
-                    return `<details class="machine-card ${cardClass}" data-machine="${escapeHtml(m.machine)}">
-                        <summary>
+                    const runningFile = getRunningFileForMachine(m.machine);
+                    const runningThumb = runningFile ? (runningFile.preview_url || (runningFile.hash ? `/thumbs/${runningFile.hash}.jpg` : '')) : '';
+                    const runningPaused = Boolean(runningFile && (runningFile.stage_key === 'PAUSED' || runningFile.status === 'PAUSE'));
+                    const runningClass = runningFile ? ` has-running ${runningPaused ? 'is-paused' : 'is-running'}` : '';
+                    const runningTitle = runningFile ? `${runningPaused ? 'Đang dừng' : 'Đang chạy'}: ${runningFile.name || ''}` : 'Không có file đang chạy';
+                    const runningProgress = runningProgressPercent(runningFile);
+                    const runningSize = runningSizeLabel(runningFile);
+                    const runningRealSize = runningRealSizeLabel(runningFile);
+                    const runningEta = runningEtaInfo(runningFile);
+                    const runningProgressChanged = hasRunningProgressChanged(m.machine, runningFile, runningProgress);
+                    const runningActive = runningActiveLabel(m.machine, runningFile, runningProgress, runningProgressChanged);
+                    const runningPowerClass = runningFile ? (runningPaused ? 'is-paused-running' : 'is-active-running') : powerClass;
+                    const runningPowerTitle = runningFile ? runningPowerStatusTitle(m.machine, runningFile, runningProgress) : machinePowerTitle(m);
+                    const runningInfo = runningFile ? `
+                            <div class="machine-running-file">
+                                <div class="machine-running-name">${escapeHtml(runningFile.name || '')}${runningRealSize ? ` | <span class="machine-running-real-size">${escapeHtml(runningRealSize)}</span>` : ''}${runningSize ? ` | <span class="machine-running-size">${escapeHtml(runningSize)}</span>` : ''}</div>
+                                <div class="machine-running-line">
+                                    <div class="machine-running-progress"><span style="width: ${runningProgress.percent}%"></span></div>
+                                    <div class="machine-running-eta">${escapeHtml(runningEta)}</div>
+                                </div>
+                            </div>` : '';
+                    return `<div class="machine-card ${cardClass}${runningClass}" data-machine="${escapeHtml(m.machine)}" data-running-count="${runningFile ? 1 : 0}" data-running-hash="${escapeHtml(runningFile?.hash || '')}" data-running-name="${escapeHtml(runningFile?.name || '')}" data-running-thumb="${escapeHtml(runningThumb)}" onclick="showMachineRunningPreview(event, '${escapeHtml(m.machine)}')" title="${escapeHtml(runningTitle)}">
+                        <div class="machine-summary">
                             <div class="top">
-                                <div><div class="machine-name">${machineLabel(m.machine, m.machine)}</div>${hostLine}</div>
-                                <span class="status-pill ${onlineClass}">${onlineText}</span>
+                                <div><div class="machine-title-row"><div class="machine-name">${machineLabel(m.machine, m.machine)}</div>${runningActive ? `<span class="machine-status-kpi ${runningPaused ? 'is-paused' : 'is-running'} ${runningProgressChanged ? 'is-updated' : ''}">${runningActive}</span>` : ''}</div>${hostLine}</div>
+                                <span class="machine-power-toggle ${runningPowerClass}" title="${escapeHtml(runningPowerTitle)}" aria-label="${escapeHtml(runningPowerTitle)}"></span>
                             </div>
                             <div class="machine-main">
                                 <div class="machine-kpi">
-                                    <span>Đang: <strong>${m.active}</strong></span>
                                     <span>Chờ: <strong>${m.queued_today || 0}</strong></span>
                                     <span>Xong: <strong>${m.done_today}</strong></span>
                                     <span>Tồn cũ: <strong>${m.old_active || 0}</strong></span>
                                 </div>
                             </div>
-                        </summary>
-                        <div class="machine-more">
-                            <div class="line"><span class="label">Ping cuối</span><span class="value">${lastPing}</span></div>
-                            <div class="line"><span class="label">Log máy gửi cuối</span><span class="value">${escapeHtml(latestMachine)}</span></div>
-                            <div class="line"><span class="label">Thao tác web cuối</span><span class="value">${escapeHtml(latestAdmin)}</span></div>
-                            <div class="line"><span class="label">Hôm nay chưa xong / đã xong</span><span class="value">${m.unfinished_today || 0} / ${m.done_today}</span></div>
-                            <div class="line"><span class="label">Đang chạy thật</span><span class="value">${m.running || 0}</span></div>
-                            <div class="line"><span class="label">Tồn cũ chưa tính</span><span class="value">${m.old_active || 0}</span></div>
+                            ${runningInfo}
                         </div>
-                    </details>`;
+                    </div>`;
                 }).join('');
                 document.getElementById('sidebar-machines').innerHTML = machineCards || '<div class="sidebar-note">Không có dữ liệu máy theo bộ lọc.</div>';
                 const outboxes = data.outboxes || [];
@@ -2643,11 +3158,6 @@ HTML_TEMPLATE = """
         function selectSystemLog(index) {
             const offset = 4;
             selectSystemItem(index + offset);
-        }
-
-        function exportExcel() {
-            let s = document.getElementById('erpStart').value; let e = document.getElementById('erpEnd').value; let m = document.getElementById('erpMachine').value;
-            window.location.href = `/api/export_csv?start=${s}&end=${e}&machine=${m}`;
         }
 
         async function fetchERP() {
@@ -3004,11 +3514,46 @@ HTML_TEMPLATE = """
 
         // ================= BOARD LOGIC =================
         let allData = { EXPORTED: [], RIP: [], RUNNING: [], DONE: [], CANCELED: [], REMOVED: [] };
+        const lastMachineProgressByMachine = new Map();
         let productionQueueTab = 'QUEUE';
         let productionProblemTab = 'PROBLEM';
         let previewPinned = false;
         let previewHoverCard = null;
         let currentPreviewFile = null;
+        let previewLoadToken = 0;
+        const previewImageCache = new Map();
+        const RUNNING_ETA_STORAGE_KEY = 'qlx_running_eta_samples_v2';
+        const runningEtaSamples = new Map();
+
+        function loadRunningEtaSamples() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(RUNNING_ETA_STORAGE_KEY) || '{}');
+                Object.entries(saved).forEach(([key, samples]) => {
+                    if (!Array.isArray(samples)) return;
+                    const clean = samples
+                        .map(sample => ({
+                            time: Number(sample.time),
+                            count: Number(sample.count),
+                            total: Number(sample.total),
+                        }))
+                        .filter(sample => Number.isFinite(sample.time) && Number.isFinite(sample.count) && Number.isFinite(sample.total))
+                        .slice(-8);
+                    if (clean.length) runningEtaSamples.set(key, clean);
+                });
+            } catch(e) {}
+        }
+
+        function saveRunningEtaSamples() {
+            try {
+                const payload = {};
+                runningEtaSamples.forEach((samples, key) => {
+                    if (samples && samples.length) payload[key] = samples.slice(-8);
+                });
+                localStorage.setItem(RUNNING_ETA_STORAGE_KEY, JSON.stringify(payload));
+            } catch(e) {}
+        }
+
+        loadRunningEtaSamples();
 
         window.onclick = function(event) {
             let loginModal = document.getElementById('loginModal'); let detailModal = document.getElementById('detailModal');
@@ -3024,6 +3569,14 @@ HTML_TEMPLATE = """
             previewPinned = false;
             previewHoverCard = null;
             currentPreviewFile = null;
+        }
+
+        function preloadPreviewImage(src) {
+            if (!src || previewImageCache.has(src)) return;
+            const img = new Image();
+            img.decoding = 'async';
+            img.src = src;
+            previewImageCache.set(src, img);
         }
 
         function syncPreviewAdminActions() {
@@ -3048,6 +3601,233 @@ HTML_TEMPLATE = """
                 if (found) return { file: found, statusKey: k };
             }
             return { file: null, statusKey: '' };
+        }
+
+        function getRunningFileForMachine(machine) {
+            return (allData.RUNNING || []).find(file => file.machine === machine) || null;
+        }
+
+        function runningProgressPercent(file) {
+            const meta = file?.machine_meta || {};
+            let raw = Number(meta.progress_percent ?? file?.progress_percent);
+            const currentPass = Number(meta.current_pass || 0);
+            const totalPass = Number(meta.total_pass || 0);
+            if (!Number.isFinite(raw) && Number.isFinite(currentPass) && Number.isFinite(totalPass) && currentPass > 0 && totalPass > 0) {
+                raw = currentPass * 100 / totalPass;
+            }
+            if (!Number.isFinite(raw) && file?.progress_label) {
+                const match = String(file.progress_label).match(/(\d+(?:[.,]\d+)?)\s*%/);
+                raw = match ? Number(match[1].replace(',', '.')) : NaN;
+            }
+            if (!Number.isFinite(raw)) return { percent: 0, label: 'chưa rõ' };
+            const percent = Math.max(0, Math.min(100, raw));
+            return { percent: Number(percent.toFixed(1)), label: Math.round(percent) + '%' };
+        }
+
+        function runningSizeLabel(file) {
+            const meta = file?.machine_meta || {};
+            const area = Number(meta.area_m2 || 0);
+            return area > 0 ? `${area.toFixed(2)} m2` : 'm2 chưa rõ';
+        }
+
+        function rawMachineSizeCm(file) {
+            const meta = file?.machine_meta || {};
+            const widthCm = Number(meta.width_cm || 0) || (Number(meta.width_mm || 0) / 10);
+            const heightCm = Number(meta.height_cm || 0) || (Number(meta.height_mm || 0) / 10);
+            return widthCm > 0 && heightCm > 0 ? { width: widthCm, height: heightCm } : null;
+        }
+
+        function designSizeCm(file) {
+            const meta = file?.machine_meta || {};
+            const widthCm = Number(meta.design_width_cm || 0);
+            const heightCm = Number(meta.design_height_cm || 0);
+            return widthCm > 0 && heightCm > 0 ? { width: widthCm, height: heightCm } : null;
+        }
+
+        function sameAreaSize(a, b) {
+            if (!a || !b) return false;
+            const areaA = a.width * a.height;
+            const areaB = b.width * b.height;
+            if (!areaA || !areaB) return false;
+            return Math.abs(areaA - areaB) / Math.max(areaA, areaB) <= 0.02;
+        }
+
+        function displayPrintSizeCm(file) {
+            const raw = rawMachineSizeCm(file);
+            const design = designSizeCm(file);
+            const machine = String(file?.machine || '');
+            if ((machine === 'InBat' || machine === 'InDecal') && design && sameAreaSize(raw, design)) return design;
+            return raw || design;
+        }
+
+        function runningRealSizeLabel(file) {
+            const size = displayPrintSizeCm(file);
+            return size ? `${size.width.toFixed(0)}x${size.height.toFixed(0)}` : '';
+        }
+
+        function compactCmLabel(value) {
+            const num = Number(String(value || '').replace(',', '.'));
+            if (!Number.isFinite(num) || num <= 0) return '';
+            return Math.abs(num - Math.round(num)) < 0.05 ? String(Math.round(num)) : num.toFixed(1);
+        }
+
+        function cardSizeLabel(file) {
+            const realSize = runningRealSizeLabel(file);
+            if (realSize) return realSize;
+            const name = String(file?.name || '');
+            const match = name.match(/(?:^|[^0-9])(\d+(?:[.,]\d+)?)\s*x\s*(\d+(?:[.,]\d+)?)(?=[^0-9]|$)/i);
+            if (!match) return '';
+            const width = compactCmLabel(match[1]);
+            const height = compactCmLabel(match[2]);
+            return width && height ? `${width}x${height}` : '';
+        }
+
+        function hasRunningProgressChanged(machine, runningFile, progress) {
+            if (!runningFile) return false;
+            const key = `${runningFile.hash || runningFile.name || ''}|${progress?.label || ''}`;
+            const previous = lastMachineProgressByMachine.get(machine);
+            lastMachineProgressByMachine.set(machine, key);
+            return Boolean(previous && previous !== key);
+        }
+
+        function runningPowerStatusTitle(machine, runningFile, progress) {
+            const progressLabel = progress?.label || runningProgressPercent(runningFile).label;
+            if (runningFile && (runningFile.stage_key === 'PAUSED' || runningFile.status === 'PAUSE' || runningFile.is_paused)) {
+                return progressLabel === 'chưa rõ' ? 'Đang dừng' : `${progressLabel} Đang dừng`;
+            }
+            const action = machine === 'CNC' ? 'Đang cắt' : 'Đang in';
+            return progressLabel === 'chưa rõ' ? action : `${progressLabel} ${action}`;
+        }
+
+        function runningActiveLabel(machine, runningFile, progress, changed) {
+            const progressLabel = progress?.label || runningProgressPercent(runningFile).label;
+            if (runningFile && (runningFile.stage_key === 'PAUSED' || runningFile.status === 'PAUSE' || runningFile.is_paused)) {
+                return progressLabel === 'chưa rõ'
+                    ? `<span class="machine-status-text">Đang dừng</span>`
+                    : `<strong>${progressLabel}</strong><span class="machine-status-text">Đang dừng</span>`;
+            }
+            if (runningFile) {
+                const action = machine === 'CNC' ? 'Đang cắt' : 'Đang in';
+                return progressLabel === 'chưa rõ'
+                    ? `<span class="machine-status-text">${action}</span>`
+                    : `<strong>${progressLabel}</strong><span class="machine-status-text">${action}</span>`;
+            }
+            return '';
+        }
+
+        function parseTimeMs(value) {
+            const time = Date.parse(String(value || '').replace(' ', 'T'));
+            return Number.isFinite(time) ? time : null;
+        }
+
+        function runningStartMs(file) {
+            let hist = [];
+            try { hist = JSON.parse(file?.history || '[]'); } catch(e) {}
+            for (let i = hist.length - 1; i >= 0; i--) {
+                const item = hist[i] || {};
+                const marker = String(item.status || item.event || '').toUpperCase();
+                if (marker === 'PRINTING' || marker === 'CUTTING') {
+                    const time = parseTimeMs(item.time);
+                    if (time) return time;
+                }
+            }
+            return parseTimeMs(file?.created) || parseTimeMs(file?.updated);
+        }
+
+        function compactDuration(ms) {
+            const minutes = Math.max(1, Math.round(ms / 60000));
+            if (minutes < 60) return `${minutes}p`;
+            const hours = Math.floor(minutes / 60);
+            const rest = minutes % 60;
+            return rest ? `${hours}g ${rest}p` : `${hours}g`;
+        }
+
+        function runningEtaKey(file) {
+            return String(file?.hash || `${file?.machine || ''}|${file?.name || ''}`).trim();
+        }
+
+        function runningProgressCounter(file) {
+            const meta = file?.machine_meta || {};
+            const machine = String(file?.machine || '');
+            if (machine === 'CNC') {
+                const pathCount = Number(meta.current_path_length || 0);
+                const pathTotal = Number(meta.total_path_length || 0);
+                if (Number.isFinite(pathCount) && Number.isFinite(pathTotal) && pathTotal > 0) return { count: pathCount, total: pathTotal };
+                const count = Number(meta.current_line || 0);
+                const total = Number(meta.line_count || 0);
+                if (Number.isFinite(count) && Number.isFinite(total) && total > 0) return { count, total };
+            }
+            if (machine === 'InBat' || machine === 'InDecal') {
+                const count = Number(meta.current_pass || 0);
+                const total = Number(meta.total_pass || 0);
+                if (Number.isFinite(count) && Number.isFinite(total) && total > 0) return { count, total };
+            }
+            return null;
+        }
+
+        function sampledRemainingMs(file, counter) {
+            const key = runningEtaKey(file);
+            if (!counter || !key) return null;
+            const count = counter.count;
+            const total = counter.total;
+            if (!Number.isFinite(count) || !Number.isFinite(total) || total <= 0 || count <= 0 || count >= total) return null;
+            const now = Date.now();
+            const samples = runningEtaSamples.get(key) || [];
+            const last = samples[samples.length - 1];
+            if (last && (last.count > count || Math.abs(Number(last.total || 0) - total) > 0.001)) samples.length = 0;
+            const currentLast = samples[samples.length - 1];
+            if (!currentLast || Math.abs(currentLast.count - count) >= 1 || now - currentLast.time >= 30000) {
+                samples.push({ time: now, count, total });
+                while (samples.length > 8) samples.shift();
+                runningEtaSamples.set(key, samples);
+                saveRunningEtaSamples();
+            }
+            const current = samples[samples.length - 1];
+            for (let i = samples.length - 2; i >= 0; i--) {
+                const older = samples[i];
+                const elapsed = current.time - older.time;
+                const gained = current.count - older.count;
+                if (elapsed >= 20000 && elapsed <= 20 * 60000 && gained >= 1) {
+                    return Math.max(0, total - current.count) * elapsed / gained;
+                }
+            }
+            return null;
+        }
+
+        function runningEtaInfo(file) {
+            if (file && (file.stage_key === 'PAUSED' || file.status === 'PAUSE' || file.is_paused)) {
+                const key = runningEtaKey(file);
+                if (key) {
+                    runningEtaSamples.delete(key);
+                    saveRunningEtaSamples();
+                }
+                return 'tạm dừng';
+            }
+            const progress = runningProgressPercent(file).percent;
+            if (!Number.isFinite(progress) || progress <= 0 || progress >= 100) return 'còn lại chưa rõ';
+            const counter = runningProgressCounter(file);
+            const remainingMs = sampledRemainingMs(file, counter);
+            if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 'đang tính thời gian';
+            return `ước tính còn ${compactDuration(remainingMs)}`;
+        }
+
+        function showMachineRunningPreview(event, machine) {
+            event.preventDefault();
+            event.stopPropagation();
+            const card = event.currentTarget?.closest('.machine-card');
+            const file = getRunningFileForMachine(machine);
+            if (!file || !card) {
+                hideCardPreview(true);
+                return;
+            }
+            const thumbSrc = file.preview_url || (file.hash ? `/thumbs/${file.hash}.jpg` : '');
+            card.dataset.machine = file.machine || machine || '';
+            card.dataset.name = file.name || '';
+            card.dataset.hash = file.hash || '';
+            card.dataset.thumb = thumbSrc;
+            card.dataset.title = file.name || '';
+            card.dataset.meta = `${file.machine || ''} ${file.time_short || ''}`.trim();
+            showCardPreview(card, thumbSrc, card.dataset.title, card.dataset.meta, true);
         }
 
         function statusLabel(statusKey) {
@@ -3084,6 +3864,7 @@ HTML_TEMPLATE = """
             const doneItems = clean.DONE || [];
             const shouldHideDoneCleanup = item => {
                 const type = String(item.cancel_type || '').toLowerCase();
+                if (type === 'production_cancel') return false;
                 if (type === 'source_renamed_done' || type === 'done_cleanup') return true;
                 const machine = String(item.machine || '').toLowerCase();
                 const removedTime = String(item.updated || '');
@@ -3095,6 +3876,10 @@ HTML_TEMPLATE = """
             };
             clean.CANCELED = (clean.CANCELED || []).filter(item => !shouldHideDoneCleanup(item));
             clean.REMOVED = (clean.REMOVED || []).filter(item => !shouldHideDoneCleanup(item));
+            clean.COUNTS = clean.COUNTS || {};
+            clean.COUNTS.CANCELED = clean.CANCELED.length;
+            clean.COUNTS.REMOVED = clean.REMOVED.length;
+            clean.COUNTS.PROBLEM = clean.COUNTS.CANCELED + clean.COUNTS.REMOVED;
             return clean;
         }
 
@@ -3117,10 +3902,16 @@ HTML_TEMPLATE = """
             if (area > 0) {
                 rows += `<div class="preview-row"><span>Kích thước</span><strong>${area.toFixed(2)} m2</strong></div>`;
             }
-            const widthCm = Number(meta.width_cm || 0);
-            const heightCm = Number(meta.height_cm || 0);
-            if (widthCm > 0 && heightCm > 0) {
-                rows += `<div class="preview-row"><span>Khổ ảnh</span><strong>${widthCm.toFixed(1)} x ${heightCm.toFixed(1)} cm</strong></div>`;
+            const printSize = displayPrintSizeCm(file);
+            if (printSize) {
+                const sizeLabel = meta.source_kind === 'rip_file_header' ? 'Khổ in' : 'Khổ ảnh';
+                rows += `<div class="preview-row"><span>${sizeLabel}</span><strong>${printSize.width.toFixed(1)} x ${printSize.height.toFixed(1)} cm</strong></div>`;
+            }
+            const designWidthCm = Number(meta.design_width_cm || 0);
+            const designHeightCm = Number(meta.design_height_cm || 0);
+            const designAlreadyShown = printSize && Math.abs(designWidthCm - printSize.width) <= 0.5 && Math.abs(designHeightCm - printSize.height) <= 0.5;
+            if (designWidthCm > 0 && designHeightCm > 0 && !designAlreadyShown) {
+                rows += `<div class="preview-row"><span>Khổ thiết kế</span><strong>${designWidthCm.toFixed(1)} x ${designHeightCm.toFixed(1)} cm</strong></div>`;
             }
             const widthMm = Number(meta.width_mm || 0);
             const heightMm = Number(meta.height_mm || 0);
@@ -3135,10 +3926,6 @@ HTML_TEMPLATE = """
             }
             if (meta.dpi_x || meta.dpi_y) {
                 rows += `<div class="preview-row"><span>DPI</span><strong>${Number(meta.dpi_x || 0).toFixed(0)} x ${Number(meta.dpi_y || 0).toFixed(0)}</strong></div>`;
-            }
-            if (meta.source_kind) {
-                const label = meta.source_kind === 'rip_preview_bmp' ? 'Ảnh RIP BMP' : meta.source_kind;
-                rows += `<div class="preview-row"><span>Nguồn</span><strong>${escapeHtml(label)}</strong></div>`;
             }
             return rows;
         }
@@ -3160,7 +3947,7 @@ HTML_TEMPLATE = """
 
             nameEl.innerText = `${file.machine || ""} | ${file.name || ""}`;
             const runInfo = Number(file.run || 1) > 1 ? " | Số lần: " + file.run : "";
-            const progressInfo = file.progress_label ? " | " + file.progress_label : "";
+            const progressInfo = file.status === "DONE" ? " | Đã xong" : (file.progress_label ? " | " + file.progress_label : "");
             statusEl.innerText = `${runInfo}${progressInfo}`.replace(/^ \| /, '');
             statusEl.style.display = statusEl.innerText ? 'block' : 'none';
 
@@ -3196,6 +3983,39 @@ HTML_TEMPLATE = """
             }).join('');
         }
 
+        function syncPreviewPrintProgress(card) {
+            const wrap = document.getElementById('cardPreviewImageWrap');
+            const overlay = document.getElementById('cardPreviewProgress');
+            if (!wrap || !overlay || !card) return;
+            overlay.classList.remove('active');
+            const found = findCardFile(card);
+            const file = found.file;
+            if (!file || !(file.machine === 'InBat' || file.machine === 'InDecal')) return;
+            const meta = file.machine_meta || {};
+            const rawProgress = Number(meta.progress_percent ?? file.progress_percent);
+            if (!Number.isFinite(rawProgress)) return;
+            const progress = Math.max(0, Math.min(100, rawProgress));
+            const isPrinting = file.status === 'PRINTING' || file.stage_key === 'RUNNING' || file.stage_key === 'PRINTING';
+            const isPaused = file.status === 'PAUSE' || file.stage_key === 'PAUSED' || file.is_paused;
+            if (!isPrinting && !isPaused) return;
+            wrap.style.setProperty('--print-progress', progress.toFixed(2) + '%');
+            overlay.classList.add('active');
+        }
+
+        function refreshVisiblePreview() {
+            if (!currentPreviewFile) return;
+            const preview = document.getElementById('cardPreview');
+            if (!preview || preview.style.display === 'none') return;
+            const hash = String(currentPreviewFile.hash || '').trim();
+            if (!hash) return;
+            const card = document.querySelector(`.card[data-hash="${CSS.escape(hash)}"]`);
+            if (!card) return;
+            const updated = findCardFile(card);
+            const file = updated.file;
+            if (file) currentPreviewFile = file;
+            showCardPreview(card, card.dataset.thumb, card.dataset.title, card.dataset.meta, previewPinned, { keepPosition: previewPinned });
+        }
+
         function positionCardPreview(card) {
             const preview = document.getElementById('cardPreview');
             const rect = card.getBoundingClientRect();
@@ -3217,40 +4037,62 @@ HTML_TEMPLATE = """
             }
             topViewport = Math.max(margin, topViewport);
 
-            preview.style.left = (window.scrollX + leftViewport) + 'px';
-            preview.style.top = (window.scrollY + topViewport) + 'px';
+            preview.style.left = leftViewport + 'px';
+            preview.style.top = topViewport + 'px';
         }
 
-        function showCardPreview(card, src, title, meta, pin=false) {
+        function showCardPreview(card, src, title, meta, pin=false, options={}) {
             if (!src && !pin) return;
+            const loadToken = ++previewLoadToken;
             const preview = document.getElementById('cardPreview');
+            const keepPosition = Boolean(options.keepPosition && preview.style.display !== 'none');
             const img = document.getElementById('cardPreviewImg');
+            const wrap = document.getElementById('cardPreviewImageWrap');
+            const overlay = document.getElementById('cardPreviewProgress');
             const empty = document.getElementById('cardPreviewEmpty');
             const details = document.getElementById('cardPreviewDetails');
-            img.style.display = src ? 'block' : 'none';
-            empty.style.display = src ? 'none' : 'flex';
+            wrap.style.display = src ? 'block' : 'none';
+            const sameSource = src && img.getAttribute('src') === src;
+            if (!sameSource) {
+                img.style.display = 'none';
+            }
+            if (overlay) overlay.classList.remove('active');
+            empty.style.display = 'flex';
             details.style.display = pin ? 'block' : 'none';
             img.onload = function() {
+                if (loadToken !== previewLoadToken) return;
                 if (img.naturalWidth > 0) {
                     img.style.display = 'block';
                     empty.style.display = 'none';
                 }
-                positionCardPreview(card);
+                if (!keepPosition) positionCardPreview(card);
             };
             img.onerror = function() {
+                if (loadToken !== previewLoadToken) return;
+                wrap.style.display = 'none';
                 img.style.display = 'none';
+                if (overlay) overlay.classList.remove('active');
                 empty.style.display = 'flex';
-                positionCardPreview(card);
+                if (!keepPosition) positionCardPreview(card);
             };
-            img.src = src || '';
+            if (src) {
+                preloadPreviewImage(src);
+                if (!sameSource) {
+                    img.src = src;
+                } else if (img.complete && img.naturalWidth > 0) {
+                    img.style.display = 'block';
+                    empty.style.display = 'none';
+                }
+                syncPreviewPrintProgress(card);
+            }
             if (pin) renderPreviewDetails(card);
 
-            preview.scrollTop = 0;
+            if (!keepPosition) preview.scrollTop = 0;
             preview.style.display = 'block';
             previewPinned = pin;
             previewHoverCard = pin ? null : card;
             preview.classList.toggle('pinned', pin);
-            positionCardPreview(card);
+            if (!keepPosition) positionCardPreview(card);
         }
 
         document.addEventListener('mousemove', function(event) {
@@ -3268,7 +4110,7 @@ HTML_TEMPLATE = """
         function connectWebSocket() {
             const ws = new WebSocket("ws://" + window.location.hostname + ":8000/ws/dashboard");
             const statusEl = document.getElementById('socket-status');
-            ws.onopen = function() { stopFallbackPolling(); statusEl.innerText = "Trực tiếp: Bật"; statusEl.className = "status-on"; fetchData(); fetchV2Status(); scheduleStatsFetch(900); };
+            ws.onopen = function() { stopFallbackPolling(); startMachineProgressPolling(); statusEl.innerText = "Trực tiếp: Bật"; statusEl.className = "status-on"; fetchData(); fetchV2Status(); scheduleStatsFetch(900); };
             ws.onmessage = function(event) { 
                 if(event.data === "NEW_DATA") { fetchData(); fetchV2Status(); scheduleStatsFetch(currentMainTab === 'flow' ? 250 : 1200); }
             };
@@ -3276,9 +4118,25 @@ HTML_TEMPLATE = """
             ws.onclose = function() { statusEl.innerText = "Mất realtime"; statusEl.className = "status-off"; startFallbackPolling(); setTimeout(connectWebSocket, 3000); };
         }
 
+        const MACHINE_PROGRESS_POLL_MS = 3000;
+        let machineProgressPollTimer = null;
+        function startMachineProgressPolling() {
+            if (machineProgressPollTimer) return;
+            machineProgressPollTimer = setInterval(() => {
+                fetchData();
+            }, MACHINE_PROGRESS_POLL_MS);
+        }
+
+        function stopMachineProgressPolling() {
+            if (!machineProgressPollTimer) return;
+            clearInterval(machineProgressPollTimer);
+            machineProgressPollTimer = null;
+        }
+
         let fallbackPollTimer = null;
         function startFallbackPolling() {
             if (fallbackPollTimer) return;
+            stopMachineProgressPolling();
             fetchData(); fetchV2Status(); scheduleStatsFetch(900);
             fallbackPollTimer = setInterval(() => {
                 fetchData(); fetchV2Status(); scheduleStatsFetch(currentMainTab === 'flow' ? 250 : 1200);
@@ -3357,6 +4215,11 @@ HTML_TEMPLATE = """
 
             document.getElementById('modal-machine-name').value = file.machine; document.getElementById('modal-real-name').value = file.name;
             document.getElementById('modal-file-hash').value = file.hash || '';
+            let confirmRunsBtn = document.getElementById('confirmRunsBtn');
+            let confirmRunCount = Number(file.run || 1);
+            let showConfirmRuns = !!file.reprint_needs_review && confirmRunCount > 1;
+            confirmRunsBtn.style.display = showConfirmRuns ? 'block' : 'none';
+            confirmRunsBtn.innerText = `Xác nhận ${actionText} x${confirmRunCount} đúng`;
 
             let hist = []; try { hist = JSON.parse(file.history || '[]'); } catch(e){}
             let html = '';
@@ -3380,6 +4243,7 @@ HTML_TEMPLATE = """
                     else if(h.event === 'DELETE' || h.event === 'ADMIN_DELETE') { desc = h.reason || "Xóa/Hủy"; color = h.cancel_type === "source_delete" ? STAGE_COLORS.REMOVED : STAGE_COLORS.CANCEL; tlClass = "tl-cancel"; }
                     else if(h.event === 'ADMIN_DONE') { desc = "Quản trị: chốt xong"; color = STAGE_COLORS.DONE; tlClass = "tl-done"; }
                     else if(h.event === 'ADMIN_EXPORT') { desc = "Quản trị: trả về xuất lại"; color = STAGE_COLORS.EXPORT; tlClass = "tl-export"; }
+                    else if(h.event === 'ADMIN_CONFIRM_RUNS') { desc = `Quản trị: xác nhận ${actionText} x${h.confirmed_runs || file.run} đúng`; color = STAGE_COLORS.RUN; tlClass = "tl-run"; }
 
                     html += `<div class="tl-item ${tlClass}"><div class="tl-time">${h.time.split(" ")[1]}</div><div class="tl-desc" style="color: ${color};">${desc}</div>${durHtml}</div>`;
                 });
@@ -3390,21 +4254,53 @@ HTML_TEMPLATE = """
             document.getElementById('detailModal').style.display = 'block';
         }
 
+        let adminStatusUpdateBusy = false;
+        function setAdminStatusBusy(isBusy) {
+            adminStatusUpdateBusy = !!isBusy;
+            document.querySelectorAll('#adminArea .action-btn, #cardPreviewActions .preview-action-btn').forEach(btn => {
+                btn.disabled = adminStatusUpdateBusy;
+            });
+            const previewActions = document.getElementById('cardPreviewActions');
+            if (previewActions) previewActions.setAttribute('aria-busy', adminStatusUpdateBusy ? 'true' : 'false');
+        }
+
         async function forceUpdate(newStatus) {
+            if (adminStatusUpdateBusy) return;
             let machine = document.getElementById('modal-machine-name').value; let fileName = document.getElementById('modal-real-name').value; let fileHash = document.getElementById('modal-file-hash').value; let pin = localStorage.getItem("admin_pin");
             if (!pin) { alert("Phiên đăng nhập hết hạn."); closeModals(); toggleAuth(); return; }
+            setAdminStatusBusy(true);
             try {
                 let res = await fetch('/api/update_status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machine: machine, name: fileName, hash: fileHash, status: newStatus, pin: pin }) });
                 let result = await res.json();
                 if(result.success) { closeModals(); fetchData(); } else { alert("Lỗi: " + result.error); if(result.error.includes("PIN")) { localStorage.removeItem("admin_pin"); checkAuthUI(); } }
             } catch (error) { alert("Lỗi kết nối."); }
+            finally { setAdminStatusBusy(false); }
+        }
+
+        async function confirmRuns() {
+            if (adminStatusUpdateBusy) return;
+            let machine = document.getElementById('modal-machine-name').value; let fileName = document.getElementById('modal-real-name').value; let fileHash = document.getElementById('modal-file-hash').value; let pin = localStorage.getItem("admin_pin");
+            if (!pin) { alert("Phiên đăng nhập hết hạn."); closeModals(); toggleAuth(); return; }
+            setAdminStatusBusy(true);
+            try {
+                let res = await fetch('/api/update_status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ machine: machine, name: fileName, hash: fileHash, status: 'CONFIRM_RUNS', pin: pin })
+                });
+                let result = await res.json();
+                if(result.success) { closeModals(); fetchData(); } else { alert("Lỗi: " + result.error); if(result.error.includes("PIN")) { localStorage.removeItem("admin_pin"); checkAuthUI(); } }
+            } catch (error) { alert("Lỗi kết nối."); }
+            finally { setAdminStatusBusy(false); }
         }
 
         async function previewForceUpdate(newStatus) {
+            if (adminStatusUpdateBusy) return;
             const file = currentPreviewFile;
             const pin = localStorage.getItem("admin_pin");
             if (!pin) { hideCardPreview(true); toggleAuth(); return; }
             if (!file) { alert("Không tìm thấy file đang chọn."); return; }
+            setAdminStatusBusy(true);
             try {
                 let res = await fetch('/api/update_status', {
                     method: 'POST',
@@ -3420,6 +4316,7 @@ HTML_TEMPLATE = """
                     if (result.error.includes("PIN")) { localStorage.removeItem("admin_pin"); checkAuthUI(); }
                 }
             } catch (error) { alert("Lỗi kết nối."); }
+            finally { setAdminStatusBusy(false); }
         }
 
         function createCard(file) {
@@ -3436,14 +4333,17 @@ HTML_TEMPLATE = """
             let progressText = file.progress_label ? escapeHtml(file.progress_label) : '';
             let badM2 = Number(file.estimated_bad_m2 || 0);
             let progressBadge = progressText ? `<div class="card-progress"><strong>${progressText}</strong>${badM2 > 0 ? ` | Hỏng ~${badM2.toFixed(2)} m2` : ''}</div>` : '';
-            let thumbSrc = file.hash ? `/thumbs/${file.hash}.jpg` : '';
+            const cardSize = cardSizeLabel(file);
+            let thumbSrc = file.preview_url || (file.hash ? `/thumbs/${file.hash}.jpg` : '');
             let meta = `${file.machine || ''} ${file.time_short || ''}`.trim();
-            let stageChip = file.stage_label ? `<span class="stage-chip">${escapeHtml(file.stage_label)}</span>` : '';
+            let stageKey = file.stage_key || file.status || '';
+            let cardStageClass = stageClass(stageKey);
+            let stageChip = file.stage_label ? `<span class="stage-chip ${cardStageClass}">${escapeHtml(file.stage_label)}</span>` : '';
 
             return `
-                <div class="card" data-machine="${file.machine}" data-name="${attrName}" data-hash="${attrHash}" data-thumb="${thumbSrc}" data-title="${attrName}" data-meta="${meta}">
+                <div class="card ${cardStageClass}" data-machine="${escapeHtml(file.machine || '')}" data-stage="${escapeHtml(stageKey)}" data-name="${attrName}" data-hash="${attrHash}" data-thumb="${thumbSrc}" data-title="${attrName}" data-meta="${meta}">
                     <div class="card-main">
-                        <div class="card-title">${file.name || "Không_Tên"}</div>
+                        <div class="card-title">${machineIcon(file.machine)}<span class="card-name">${escapeHtml(file.name || "Không_Tên")}</span>${cardSize ? ` | <span class="card-real-size">${escapeHtml(cardSize)}</span>` : ''}</div>
                         ${stageChip}
                         <div class="card-time">${file.time_short || ''}</div>
                     </div>
@@ -3492,9 +4392,14 @@ HTML_TEMPLATE = """
         }
 
         function loadedProductionCount(key) {
-            if (key === 'QUEUE') return (allData.EXPORTED || []).length + (allData.RIP || []).length + (allData.RUNNING || []).length;
+            if (key === 'QUEUE') return (allData.EXPORTED || []).length + (allData.RIP || []).length;
             if (key === 'PROBLEM') return (allData.CANCELED || []).length + (allData.REMOVED || []).length;
             return (allData[key] || []).length;
+        }
+
+        function productionQueueTotalCount(key) {
+            if (key === 'QUEUE') return boardCount('EXPORTED') + boardCount('RIP');
+            return boardCount(key);
         }
 
         function attachBoardScrollLoaders() {
@@ -3508,7 +4413,7 @@ HTML_TEMPLATE = """
                     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
                     if (!nearBottom) return;
                     const hasMore =
-                        (id === 'queue-list' && loadedProductionCount(productionQueueTab) < boardCount(productionQueueTab)) ||
+                        (id === 'queue-list' && loadedProductionCount(productionQueueTab) < productionQueueTotalCount(productionQueueTab)) ||
                         (id === 'done-compact-list' && allData.DONE.length < boardCount('DONE')) ||
                         (id === 'problem-list' && loadedProductionCount(productionProblemTab) < boardCount(productionProblemTab));
                     if (!hasMore) return;
@@ -3523,9 +4428,17 @@ HTML_TEMPLATE = """
                 event.stopPropagation();
             }
             if (activeDataRequests > 0) return;
-            boardVisibleLimit += BOARD_PAGE_INCREMENT;
+            boardVisibleLimit = Math.min(300, boardVisibleLimit + BOARD_PAGE_INCREMENT);
             fetchData();
         }
+
+        window.addEventListener('resize', () => {
+            clearTimeout(boardResizeTimer);
+            boardResizeTimer = setTimeout(() => {
+                if (!ensureResponsiveBoardLimit()) return;
+                fetchData();
+            }, 180);
+        });
 
         function attachCardPreviewEvents() {
             document.querySelectorAll('.card').forEach(card => {
@@ -3541,6 +4454,37 @@ HTML_TEMPLATE = """
                     showCardPreview(card, card.dataset.thumb, card.dataset.title, card.dataset.meta, true);
                 });
             });
+        }
+
+        function preloadVisiblePreviewImages() {
+            const run = () => {
+                const progressCards = [...document.querySelectorAll('.card[data-thumb*="/cnc-progress-thumb/"]')]
+                    .filter(card => card.dataset.thumb);
+                const compactCards = [...document.querySelectorAll('.compact-board .card[data-thumb]')]
+                    .filter(card => card.dataset.thumb)
+                    .sort((a, b) => {
+                        const aCnc = a.dataset.thumb.includes('/cnc-progress-thumb/') ? 0 : 1;
+                        const bCnc = b.dataset.thumb.includes('/cnc-progress-thumb/') ? 0 : 1;
+                        if (aCnc !== bCnc) return aCnc - bCnc;
+                        return a.getBoundingClientRect().top - b.getBoundingClientRect().top;
+                    });
+                const seen = new Set();
+                const cards = progressCards.concat(compactCards)
+                    .filter(card => {
+                        const src = card.dataset.thumb;
+                        if (!src || seen.has(src)) return false;
+                        seen.add(src);
+                        return true;
+                    })
+                    .slice(0, 14);
+                cards.forEach(card => preloadPreviewImage(card.dataset.thumb));
+            };
+            setTimeout(run, 50);
+            if ('requestIdleCallback' in window) {
+                requestIdleCallback(run, { timeout: 1200 });
+            } else {
+                setTimeout(run, 400);
+            }
         }
 
         function renderAttention(filter) {
@@ -3593,16 +4537,14 @@ HTML_TEMPLATE = """
                 renderAttention(filter);
 
                 const queueByStage = {
-                    QUEUE: fExport.map(f => ({...f, stage_label: 'Xuất'}))
-                        .concat(fRip.map(f => ({...f, stage_label: 'RIP'})))
-                        .concat(fRun.map(f => ({...f, stage_label: 'Đang chạy'}))),
-                    EXPORTED: fExport.map(f => ({...f, stage_label: 'Xuất'})),
-                    RIP: fRip.map(f => ({...f, stage_label: 'RIP'})),
-                    RUNNING: fRun.map(f => ({...f, stage_label: 'Đang chạy'})),
+                    QUEUE: fExport.map(f => ({...f, stage_label: 'Xuất', stage_key: 'EXPORTED'}))
+                        .concat(fRip.map(f => ({...f, stage_label: 'RIP', stage_key: 'RIP'}))),
+                    EXPORTED: fExport.map(f => ({...f, stage_label: 'Xuất', stage_key: 'EXPORTED'})),
+                    RIP: fRip.map(f => ({...f, stage_label: 'RIP', stage_key: 'RIP'})),
                 };
                 const queueItems = (queueByStage[productionQueueTab] || queueByStage.QUEUE).sort(sortFn);
-                const trueProblemItems = fCancel.map(f => ({...f, stage_label: 'Lỗi'})).sort(sortFn);
-                const removedProblemItems = fRemoved.map(f => ({...f, stage_label: 'Xóa'})).sort(sortFn);
+                const trueProblemItems = fCancel.map(f => ({...f, stage_label: 'Lỗi', stage_key: 'CANCELED'})).sort(sortFn);
+                const removedProblemItems = fRemoved.map(f => ({...f, stage_label: 'Xóa', stage_key: 'REMOVED'})).sort(sortFn);
                 const problemByStage = {
                     PROBLEM: trueProblemItems.concat(removedProblemItems).sort(sortFn),
                     CANCELED: trueProblemItems,
@@ -3610,23 +4552,25 @@ HTML_TEMPLATE = """
                 };
                 const problemItems = (problemByStage[productionProblemTab] || problemByStage.PROBLEM).sort(sortFn);
                 const problemTotal = boardCount('PROBLEM', trueProblemItems.length + removedProblemItems.length);
-                document.getElementById('queue-list').innerHTML = renderCardList(queueItems, boardCount(productionQueueTab, queueItems.length));
-                document.getElementById('done-compact-list').innerHTML = renderCardList(fDone, boardCount('DONE', fDone.length));
+                document.getElementById('queue-list').innerHTML = renderCardList(queueItems, productionQueueTotalCount(productionQueueTab));
+                document.getElementById('done-compact-list').innerHTML = renderCardList(fDone.map(f => ({...f, stage_key: 'DONE'})), boardCount('DONE', fDone.length));
                 document.getElementById('problem-list').innerHTML = renderCardList(problemItems, boardCount(productionProblemTab, problemItems.length));
                 setStageTabActive('queue', productionQueueTab);
                 setStageTabActive('problem', productionProblemTab);
 
-                document.getElementById('exported-list').innerHTML = renderCardList(fExport, boardCount('EXPORTED', fExport.length));
-                document.getElementById('rip-list').innerHTML = renderCardList(fRip, boardCount('RIP', fRip.length));
-                document.getElementById('run-list').innerHTML = renderCardList(fRun, boardCount('RUNNING', fRun.length));
-                document.getElementById('done-list').innerHTML = renderCardList(fDone, boardCount('DONE', fDone.length));
-                document.getElementById('cancel-list').innerHTML = renderCardList(fCancel, boardCount('CANCELED', fCancel.length));
-                document.getElementById('removed-list').innerHTML = renderCardList(fRemoved, boardCount('REMOVED', fRemoved.length));
+                document.getElementById('exported-list').innerHTML = renderCardList(fExport.map(f => ({...f, stage_label: 'Xuất', stage_key: 'EXPORTED'})), boardCount('EXPORTED', fExport.length));
+                document.getElementById('rip-list').innerHTML = renderCardList(fRip.map(f => ({...f, stage_label: 'RIP', stage_key: 'RIP'})), boardCount('RIP', fRip.length));
+                document.getElementById('run-list').innerHTML = renderCardList(fRun.map(f => ({...f, stage_label: f.stage_label || 'Đang chạy', stage_key: f.stage_key || 'RUNNING'})), boardCount('RUNNING', fRun.length));
+                document.getElementById('done-list').innerHTML = renderCardList(fDone.map(f => ({...f, stage_label: 'Xong', stage_key: 'DONE'})), boardCount('DONE', fDone.length));
+                document.getElementById('cancel-list').innerHTML = renderCardList(fCancel.map(f => ({...f, stage_label: 'Lỗi', stage_key: 'CANCELED'})), boardCount('CANCELED', fCancel.length));
+                document.getElementById('removed-list').innerHTML = renderCardList(fRemoved.map(f => ({...f, stage_label: 'Xóa', stage_key: 'REMOVED'})), boardCount('REMOVED', fRemoved.length));
                 attachCardPreviewEvents();
                 attachBoardScrollLoaders();
+                preloadVisiblePreviewImages();
+                refreshVisiblePreview();
 
                 const compactCounts = [
-                    ['queue-list', boardCount('QUEUE', fExport.length + fRip.length + fRun.length)],
+                    ['queue-list', boardCount('EXPORTED', fExport.length) + boardCount('RIP', fRip.length)],
                     ['done-compact-list', boardCount('DONE', fDone.length)],
                     ['problem-list', problemTotal],
                 ];
@@ -3644,11 +4588,10 @@ HTML_TEMPLATE = """
                     ['count-done', boardCount('DONE', fDone.length)],
                     ['count-cancel', boardCount('CANCELED', fCancel.length)],
                     ['count-removed', boardCount('REMOVED', fRemoved.length)],
-                    ['count-queue', boardCount('QUEUE', fExport.length + fRip.length + fRun.length)],
-                    ['count-queue-all', boardCount('QUEUE', fExport.length + fRip.length + fRun.length)],
+                    ['count-queue', boardCount('EXPORTED', fExport.length) + boardCount('RIP', fRip.length)],
+                    ['count-queue-all', boardCount('EXPORTED', fExport.length) + boardCount('RIP', fRip.length)],
                     ['count-queue-export', boardCount('EXPORTED', fExport.length)],
                     ['count-queue-rip', boardCount('RIP', fRip.length)],
-                    ['count-queue-running', boardCount('RUNNING', fRun.length)],
                     ['count-done-compact', boardCount('DONE', fDone.length)],
                     ['count-problem', problemTotal],
                     ['count-problem-all', problemTotal],
@@ -3674,6 +4617,7 @@ HTML_TEMPLATE = """
             let end = document.getElementById('erpEnd').value;
             let machine = document.getElementById('erpMachine').value;
             if(!start || !end) return;
+            ensureResponsiveBoardLimit();
             const requestId = ++dataRequestId;
             activeDataRequests++;
             setBoardLoading(true);
@@ -3709,9 +4653,326 @@ HTML_TEMPLATE = """
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+def find_thumb_row_by_hash(file_hash):
+    for machine in MACHINES:
+        db_path = os.path.join(DB_DIR, f"{machine}.db")
+        if not os.path.exists(db_path):
+            continue
+        conn = None
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+            cols = [col[1] for col in conn.execute("PRAGMA table_info(files)").fetchall()]
+            if "file_hash" not in cols:
+                continue
+            file_name_expr = "file_name" if "file_name" in cols else "'' AS file_name"
+            file_path_expr = "file_path" if "file_path" in cols else "'' AS file_path"
+            updated_expr = "updated_time" if "updated_time" in cols else "'' AS updated_time"
+            meta_expr = machine_meta_select_expr(conn)
+            row = conn.execute(
+                f"""
+                SELECT {file_name_expr}, {file_path_expr}, {updated_expr}, {meta_expr}
+                FROM files
+                WHERE file_hash=?
+                LIMIT 1
+                """,
+                (file_hash,),
+            ).fetchone()
+            if row:
+                return {
+                    "machine": machine,
+                    "file_name": row[0] or "",
+                    "file_path": row[1] or "",
+                    "updated_time": row[2] or "",
+                    "machine_meta": parse_machine_meta_json(row[3]),
+                }
+        except Exception:
+            continue
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    return None
+
+def thumb_source_candidates(row, allow_resolve=True):
+    if not row:
+        return []
+    meta = parse_machine_meta_json(row.get("machine_meta"))
+    file_path = row.get("file_path") or ""
+    file_name = row.get("file_name") or row.get("name") or ""
+    machine = row.get("machine") or ""
+    event_time = row.get("updated_time") or row.get("updated") or row.get("created") or ""
+    design_source = meta.get("design_metadata_source")
+    preview_source = meta.get("preview_source")
+    metadata_source = meta.get("metadata_source")
+    machine_key = str(machine or "").strip().lower()
+    preferred_sources = [design_source, preview_source, metadata_source, file_path] if machine_key in {"inbat", "indecal"} else [preview_source, metadata_source, file_path, design_source]
+    machine_thumbs = []
+    for candidate in preferred_sources:
+        try:
+            machine_thumb = find_machine_thumbnail_source(machine, candidate)
+            if machine_thumb:
+                machine_thumbs.append(machine_thumb)
+        except Exception:
+            pass
+    if machine_key in {"inbat", "indecal"}:
+        candidates = [
+            *machine_thumbs,
+            design_source,
+            preview_source,
+            meta.get("thumbnail_source"),
+            metadata_source,
+            row.get("file_path"),
+        ]
+    else:
+        candidates = [
+            *machine_thumbs,
+            preview_source,
+            meta.get("thumbnail_source"),
+            metadata_source,
+            row.get("file_path"),
+            design_source,
+        ]
+    if allow_resolve and not machine_thumbs:
+        try:
+            cache_key = (str(machine or ""), str(file_path or ""), str(file_name or ""), str(event_time or ""))
+            resolved_meta = _machine_meta_refresh_cache.get(cache_key)
+            if resolved_meta is None:
+                resolved_meta = collect_machine_file_meta_for_server(machine, file_path, file_name, event_time)
+                _machine_meta_refresh_cache[cache_key] = resolved_meta
+            resolved_thumb = find_machine_thumbnail_source(machine, resolved_meta.get("resolved_file_path"))
+            resolved_sources = [
+                resolved_meta.get("design_metadata_source"),
+                resolved_meta.get("preview_source"),
+                resolved_meta.get("thumbnail_source"),
+                resolved_meta.get("metadata_source"),
+            ] if machine_key in {"inbat", "indecal"} else [
+                resolved_meta.get("preview_source"),
+                resolved_meta.get("thumbnail_source"),
+                resolved_meta.get("metadata_source"),
+                resolved_meta.get("design_metadata_source"),
+            ]
+            candidates.extend([resolved_thumb, *resolved_sources])
+        except Exception:
+            pass
+    expanded = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        expanded.append(candidate)
+        try:
+            thumb_candidate = find_thumbnail_source(candidate)
+            if thumb_candidate:
+                expanded.append(thumb_candidate)
+        except Exception:
+            pass
+    deduped = []
+    seen = set()
+    for candidate in expanded:
+        key = str(candidate).lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(candidate)
+    return deduped
+
+def thumb_source_marker_path(target_path):
+    return f"{target_path}.src"
+
+def read_thumb_source_marker(target_path):
+    marker_path = thumb_source_marker_path(target_path)
+    try:
+        if os.path.exists(marker_path):
+            with open(marker_path, "r", encoding="utf-8") as handle:
+                return handle.read().strip()
+    except Exception:
+        pass
+    return ""
+
+def write_thumb_source_marker(target_path, source):
+    marker_path = thumb_source_marker_path(target_path)
+    try:
+        with open(marker_path, "w", encoding="utf-8") as handle:
+            handle.write(str(source or "").strip())
+    except Exception:
+        pass
+
+def generate_thumb_from_source(source, target_path):
+    if not (HAS_PIL and source and os.path.exists(source)):
+        return False
+    try:
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        with Image.open(source) as img:
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            elif img.mode == "L":
+                img = img.convert("RGB")
+            img.thumbnail((420, 420), Image.LANCZOS)
+            img.save(target_path, "JPEG", quality=82, optimize=True)
+            write_thumb_source_marker(target_path, source)
+        return os.path.exists(target_path)
+    except Exception:
+        try:
+            if os.path.exists(target_path):
+                os.remove(target_path)
+            marker_path = thumb_source_marker_path(target_path)
+            if os.path.exists(marker_path):
+                os.remove(marker_path)
+        except Exception:
+            pass
+        return False
+
+def generate_missing_thumb(filename):
+    basename = os.path.basename(filename or "")
+    file_hash, ext = os.path.splitext(basename)
+    if ext.lower() not in (".jpg", ".jpeg"):
+        return None
+    if not re.match(r"^[A-Za-z0-9_.-]+$", file_hash or ""):
+        return None
+    target_path = os.path.join(THUMB_DIR, basename)
+    row = find_thumb_row_by_hash(file_hash)
+    for source in thumb_source_candidates(row):
+        if generate_thumb_from_source(source, target_path):
+            return target_path
+    return None
+
+def ensure_item_thumbnail(item):
+    file_hash = str((item or {}).get("hash") or "").strip()
+    if not file_hash:
+        return False
+    thumb_name = f"{file_hash}.jpg"
+    thumb_path = os.path.join(THUMB_DIR, thumb_name)
+    sources = thumb_source_candidates(item, allow_resolve=True)
+    had_existing_thumb = os.path.exists(thumb_path)
+    if had_existing_thumb:
+        marker_source = read_thumb_source_marker(thumb_path)
+        if marker_source and any(str(source or "").strip().lower() == marker_source.lower() for source in sources):
+            return True
+    for source in sources:
+        if generate_thumb_from_source(source, thumb_path):
+            return True
+    return had_existing_thumb and os.path.exists(thumb_path)
+
+def cached_item_thumbnail_exists(item):
+    file_hash = str((item or {}).get("hash") or "").strip()
+    if not file_hash:
+        return False
+    return os.path.exists(os.path.join(THUMB_DIR, f"{file_hash}.jpg"))
+
 @app.route("/thumbs/<path:filename>")
 def serve_thumb(filename):
-    return send_from_directory(THUMB_DIR, filename)
+    thumb_path = os.path.join(THUMB_DIR, filename)
+    if not os.path.exists(thumb_path):
+        generate_missing_thumb(filename)
+    response = send_from_directory(THUMB_DIR, filename)
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
+def serve_cnc_progress_fallback_thumb(file_hash):
+    thumb_name = f"{file_hash}.jpg"
+    thumb_path = os.path.join(THUMB_DIR, thumb_name)
+    if not os.path.exists(thumb_path):
+        return None
+    with open(thumb_path, "rb") as handle:
+        response = Response(handle.read(), mimetype="image/jpeg")
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    response.headers["X-QLX-Preview-Fallback"] = "static-thumb"
+    return response
+
+def serve_cached_cnc_progress_thumb(file_hash, cache_line):
+    prefix = f"{TAP_PREVIEW_CACHE_VERSION}_{file_hash}_{cache_line}_"
+    try:
+        matches = [
+            os.path.join(CNC_PROGRESS_THUMB_DIR, name)
+            for name in os.listdir(CNC_PROGRESS_THUMB_DIR)
+            if name.startswith(prefix) and name.lower().endswith(".jpg")
+        ]
+    except Exception:
+        return None
+    if not matches:
+        return None
+    cache_path = max(matches, key=lambda path: os.path.getmtime(path))
+    with open(cache_path, "rb") as handle:
+        response = Response(handle.read(), mimetype="image/jpeg")
+    response.headers["Cache-Control"] = "public, max-age=86400, immutable"
+    response.headers["X-QLX-Preview-Cache"] = "hit"
+    return response
+
+@app.route("/cnc-progress-thumb/<path:filename>")
+def serve_cnc_progress_thumb(filename):
+    file_hash = os.path.splitext(os.path.basename(filename))[0]
+    if not re.match(r"^[A-Za-z0-9_.-]+$", file_hash or ""):
+        return Response("Bad file hash", status=400)
+
+    db_path = os.path.join(DB_DIR, "CNC.db")
+    if not os.path.exists(db_path):
+        fallback = serve_cnc_progress_fallback_thumb(file_hash)
+        if fallback is not None:
+            return fallback
+        return Response("CNC DB not found", status=404)
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+        meta_expr = machine_meta_select_expr(conn)
+        row = conn.execute(
+            f"SELECT file_path, {meta_expr} FROM files WHERE file_hash=? LIMIT 1",
+            (file_hash,),
+        ).fetchone()
+        conn.close()
+    except Exception as exc:
+        fallback = serve_cnc_progress_fallback_thumb(file_hash)
+        if fallback is not None:
+            return fallback
+        return Response(f"Cannot read CNC DB: {exc}", status=500)
+
+    if not row:
+        fallback = serve_cnc_progress_fallback_thumb(file_hash)
+        if fallback is not None:
+            return fallback
+        return Response("File not found", status=404)
+
+    file_path, machine_meta_json = row
+    meta = parse_machine_meta_json(machine_meta_json)
+    current_line = cnc_current_line(meta)
+    if not current_line:
+        fallback = serve_cnc_progress_fallback_thumb(file_hash)
+        if fallback is not None:
+            return fallback
+        return Response("No current line", status=404)
+
+    cache_line = cnc_progress_cache_line(current_line) or current_line
+    cached = serve_cached_cnc_progress_thumb(file_hash, cache_line)
+    if cached is not None:
+        return cached
+
+    source_path = meta.get("metadata_source") or file_path or ""
+    tap_path = find_existing_tap(str(source_path))
+    if not tap_path:
+        fallback = serve_cnc_progress_fallback_thumb(file_hash)
+        if fallback is not None:
+            return fallback
+        return Response("TAP file not found", status=404)
+
+    try:
+        mtime = int(os.path.getmtime(tap_path))
+    except Exception:
+        mtime = 0
+    cache_name = f"{TAP_PREVIEW_CACHE_VERSION}_{file_hash}_{cache_line}_{mtime}.jpg"
+    cache_path = os.path.join(CNC_PROGRESS_THUMB_DIR, cache_name)
+    try:
+        if not os.path.exists(cache_path):
+            data = render_tap_progress_preview_bytes(tap_path, cache_line)
+            with open(cache_path, "wb") as handle:
+                handle.write(data)
+        with open(cache_path, "rb") as handle:
+            response = Response(handle.read(), mimetype="image/jpeg")
+        response.headers["Cache-Control"] = "public, max-age=86400, immutable"
+        return response
+    except Exception as exc:
+        fallback = serve_cnc_progress_fallback_thumb(file_hash)
+        if fallback is not None:
+            return fallback
+        return Response(f"Cannot render TAP preview: {exc}", status=500)
 
 @app.route("/assets/<path:filename>")
 def serve_asset(filename):
@@ -3754,7 +5015,19 @@ def board_rows(cursor, meta_expr, where_sql, params, limit):
     )
     return cursor.fetchall()
 
-def build_board_item(machine, row, done_names, done_histories_by_name, completed_samples, context_rows):
+def later_done_resolved_filter():
+    clause = """
+        NOT EXISTS (
+            SELECT 1
+            FROM files AS later_done
+            WHERE later_done.status='DONE'
+              AND LOWER(TRIM(later_done.file_name)) = LOWER(TRIM(files.file_name))
+              AND DATETIME(later_done.updated_time) > DATETIME(files.updated_time)
+        )
+    """
+    return clause
+
+def build_board_item(machine, row, done_names, done_histories_by_name, completed_samples, context_rows, resolve_preview=True):
     f_hash, name, file_path, status, c_time, up_time, run_cnt, history_data, z_sent, machine_meta_json = row
     time_short = up_time.split(" ")[1] if up_time and " " in up_time else ""
     try:
@@ -3767,6 +5040,7 @@ def build_board_item(machine, row, done_names, done_histories_by_name, completed
         "machine": machine or "",
         "name": str(name) if name else "Khong_Ten",
         "file_path": str(file_path) if file_path else "",
+        "status": status or "",
         "created": c_time or "",
         "updated": up_time or "",
         "time_short": time_short or "",
@@ -3779,7 +5053,13 @@ def build_board_item(machine, row, done_names, done_histories_by_name, completed
         "zalo_sent": z_sent or 0,
         "machine_meta": parse_machine_meta_json(machine_meta_json),
     }
-    item["has_thumbnail"] = bool(item["hash"]) and os.path.exists(os.path.join(THUMB_DIR, f"{item['hash']}.jpg"))
+    apply_reprint_run_confirmation(item, history_data)
+    if resolve_preview:
+        refresh_item_machine_meta_from_server(item)
+    normalize_running_item_progress(item)
+    item["has_thumbnail"] = ensure_item_thumbnail(item) if resolve_preview else cached_item_thumbnail_exists(item)
+    if status == "DONE":
+        clear_finished_progress_state(item)
     if status == "DELETED":
         delete_info = classify_deleted_job(machine, item["name"], history_data)
         item["cancel_type"] = delete_info["type"]
@@ -3811,21 +5091,21 @@ def build_board_item(machine, row, done_names, done_histories_by_name, completed
                 item["reprint_label"] = done_duration_info["label"]
             progress_info = estimate_cancel_progress(item["name"], history_data, completed_samples)
             item.update(progress_info)
+            if machine == "CNC":
+                item.pop("estimated_bad_m2", None)
+    if status == "DONE":
+        clear_finished_progress_state(item)
 
-    if status in ["PRINTING", "CUTTING"]:
+    if status in ["PRINTING", "CUTTING", "PAUSE"]:
+        apply_live_print_progress(item)
+        if status == "PAUSE" or is_active_paused(history_data):
+            item["is_paused"] = True
+            item["stage_key"] = "PAUSED"
+            item["stage_label"] = "Đang dừng"
         progress_label = active_progress_label(item.get("machine_meta"))
         if progress_label:
             item["progress_label"] = progress_label
-        else:
-            progress_info = estimate_active_progress(
-                item["name"],
-                history_data,
-                completed_samples,
-                item.get("machine_meta"),
-            )
-            if progress_info.get("progress_label"):
-                item.update(progress_info)
-        later_run = find_later_machine_run(
+        later_run = None if item.get("is_paused") else find_later_machine_run(
             context_rows,
             name,
             active_start_time(history_data, up_time),
@@ -3849,6 +5129,7 @@ def build_board_item(machine, row, done_names, done_histories_by_name, completed
             item["active_reprint_waiting_done"] = True
             item["reprint_needs_review"] = True
             item["reprint_label"] = active_info["label"]
+    attach_cnc_progress_preview(item, status)
     return item
 
 def append_board_item(result, item, status):
@@ -3856,7 +5137,7 @@ def append_board_item(result, item, status):
         result["EXPORTED"].append(item)
     elif status == "RIP":
         result["RIP"].append(item)
-    elif status in ["PRINTING", "CUTTING"]:
+    elif status in ["PRINTING", "CUTTING", "PAUSE"]:
         if item.get("stale_active"):
             result["CANCELED"].append(item)
         else:
@@ -3886,57 +5167,59 @@ def api_data_limited(start_date, end_date, limit):
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
             c = conn.cursor()
             meta_expr = machine_meta_select_expr(conn)
-            done_names = {
-                str(row[0] or "").lower().strip()
-                for row in c.execute(
-                    f"SELECT file_name FROM files WHERE status='DONE' AND {date_sql}",
-                    (start_date, end_date),
-                ).fetchall()
-            }
-            recent_done_rows = board_rows(c, meta_expr, f"status='DONE' AND {date_sql}", (start_date, end_date), max(limit, 160))
+            all_done_rows = board_rows(c, meta_expr, "status='DONE'", (), 10000)
+            done_names = {str(row[1] or "").lower().strip() for row in all_done_rows}
             done_histories_by_name = {}
-            for row in recent_done_rows:
+            for row in all_done_rows:
                 done_histories_by_name.setdefault(str(row[1] or "").lower().strip(), []).append(row[7])
             completed_samples = [
                 {"file_name": row[1], "history": row[7], "machine_meta": parse_machine_meta_json(row[9])}
-                for row in recent_done_rows
+                for row in all_done_rows
             ]
-            active_rows = board_rows(c, meta_expr, f"status IN ('PRINTING','CUTTING') AND {date_sql}", (start_date, end_date), 200)
-            context_rows = recent_done_rows + active_rows
-
-            result["COUNTS"]["EXPORTED"] += board_count(c, f"status IN ('EXPORTED','WRONG_DAY') AND {date_sql}", (start_date, end_date))
-            result["COUNTS"]["RIP"] += board_count(c, f"status='RIP' AND {date_sql}", (start_date, end_date))
-            result["COUNTS"]["RUNNING"] += board_count(c, f"status IN ('PRINTING','CUTTING') AND {date_sql}", (start_date, end_date))
-            result["COUNTS"]["DONE"] += board_count(c, f"status='DONE' AND {date_sql}", (start_date, end_date))
-
-            queue_rows = board_rows(c, meta_expr, f"status IN ('EXPORTED','WRONG_DAY','RIP','PRINTING','CUTTING') AND {date_sql}", (start_date, end_date), limit)
-            done_rows = board_rows(c, meta_expr, f"status='DONE' AND {date_sql}", (start_date, end_date), limit)
+            queue_rows = board_rows(c, meta_expr, f"status IN ('EXPORTED','WRONG_DAY','RIP','PRINTING','CUTTING','PAUSE') AND {date_sql}", (start_date, end_date), 10000)
+            done_rows = board_rows(c, meta_expr, f"status='DONE' AND {date_sql}", (start_date, end_date), 10000)
             deleted_rows = board_rows(c, meta_expr, f"status='DELETED' AND {date_sql}", (start_date, end_date), 10000)
+            queue_rows = filter_rows_resolved_by_later_done(machine, queue_rows, all_done_rows, allow_source_lookup=False)
+            deleted_rows = filter_rows_resolved_by_later_done(machine, deleted_rows, all_done_rows, allow_source_lookup=False)
+            active_rows = [row for row in queue_rows if row[3] in ("PRINTING", "CUTTING", "PAUSE")]
+            context_rows = all_done_rows + active_rows
+
+            result["COUNTS"]["EXPORTED"] += sum(1 for row in queue_rows if row[3] in ("EXPORTED", "WRONG_DAY"))
+            result["COUNTS"]["RIP"] += sum(1 for row in queue_rows if row[3] == "RIP")
+            result["COUNTS"]["RUNNING"] += sum(1 for row in queue_rows if row[3] in ("PRINTING", "CUTTING"))
+            result["COUNTS"]["DONE"] += len(done_rows)
+
+            done_rows = board_rows(c, meta_expr, f"status='DONE' AND {date_sql}", (start_date, end_date), limit)
 
             for row in queue_rows + done_rows:
-                item = build_board_item(machine, row, done_names, done_histories_by_name, completed_samples, context_rows)
+                item = build_board_item(machine, row, done_names, done_histories_by_name, completed_samples, context_rows, resolve_preview=False)
                 append_board_item(result, item, row[3])
+                if row[3] == "DONE":
+                    append_production_cancel_from_done_history(result, item, completed_samples)
 
             for row in deleted_rows:
-                item = build_board_item(machine, row, done_names, done_histories_by_name, completed_samples, context_rows)
+                item = build_board_item(machine, row, done_names, done_histories_by_name, completed_samples, context_rows, resolve_preview=False)
                 if item.get("is_production_error"):
-                    result["COUNTS"]["CANCELED"] += 1
-                    if len(result["CANCELED"]) < limit:
-                        result["CANCELED"].append(item)
+                    result["CANCELED"].append(item)
                 else:
-                    result["COUNTS"]["REMOVED"] += 1
-                    if len(result["REMOVED"]) < limit:
-                        result["REMOVED"].append(item)
+                    result["REMOVED"].append(item)
             conn.close()
         except Exception:
             pass
 
-    for key in ["EXPORTED", "RIP", "RUNNING", "DONE", "CANCELED", "REMOVED"]:
+    for key in ["EXPORTED", "RIP", "RUNNING", "DONE"]:
         result[key] = dedupe_visible_items(result[key])
         result[key].sort(key=lambda item: item.get("updated") or "", reverse=True)
         result[key] = result[key][:limit]
+    for key in ["CANCELED", "REMOVED"]:
+        result[key] = dedupe_visible_items(result[key])
+        result[key].sort(key=lambda item: item.get("updated") or "", reverse=True)
     result["CANCELED"] = filter_removed_items_with_later_done(result["CANCELED"], result["DONE"])
     result["REMOVED"] = filter_removed_items_with_later_done(result["REMOVED"], result["DONE"])
+    result["COUNTS"]["CANCELED"] = len(result["CANCELED"])
+    result["COUNTS"]["REMOVED"] = len(result["REMOVED"])
+    result["CANCELED"] = result["CANCELED"][:limit]
+    result["REMOVED"] = result["REMOVED"][:limit]
     result["COUNTS"]["QUEUE"] = result["COUNTS"]["EXPORTED"] + result["COUNTS"]["RIP"] + result["COUNTS"]["RUNNING"]
     result["COUNTS"]["PROBLEM"] = result["COUNTS"]["CANCELED"] + result["COUNTS"]["REMOVED"]
     result["ATTENTION"] = build_attention_items(result)
@@ -3951,6 +5234,7 @@ def api_data():
     if limit is not None:
         return jsonify(api_data_limited(start_date, end_date, limit))
     result = {"EXPORTED": [], "RIP": [], "RUNNING": [], "DONE": [], "CANCELED": [], "REMOVED": []}
+    unresolved_sql = later_done_resolved_filter()
     
     for machine in MACHINES:
         db_path = os.path.join(DB_DIR, f"{machine}.db")
@@ -3961,7 +5245,7 @@ def api_data():
             meta_expr = machine_meta_select_expr(conn)
             c.execute(
                 f"SELECT file_hash, file_name, file_path, status, created_time, updated_time, run_count, history, zalo_sent, {meta_expr} "
-                "FROM files WHERE DATE(updated_time) BETWEEN ? AND ?",
+                f"FROM files WHERE DATE(updated_time) BETWEEN ? AND ? AND (status='DONE' OR {unresolved_sql})",
                 (start_date, end_date),
             )
             rows = c.fetchall()
@@ -3991,6 +5275,7 @@ def api_data():
                     "machine": machine or "", 
                     "name": str(name) if name else "Khong_Ten", 
                     "file_path": str(file_path) if file_path else "",
+                    "status": status or "",
                     "created": c_time or "", 
                     "updated": up_time or "", 
                     "time_short": time_short or "", 
@@ -4003,7 +5288,12 @@ def api_data():
                     "zalo_sent": z_sent or 0,
                     "machine_meta": parse_machine_meta_json(machine_meta_json),
                 }
-                item["has_thumbnail"] = bool(item["hash"]) and os.path.exists(os.path.join(THUMB_DIR, f"{item['hash']}.jpg"))
+                apply_reprint_run_confirmation(item, history_data)
+                refresh_item_machine_meta_from_server(item)
+                normalize_running_item_progress(item)
+                item["has_thumbnail"] = ensure_item_thumbnail(item)
+                if status == "DONE":
+                    clear_finished_progress_state(item)
                 if status == "DELETED":
                     delete_info = classify_deleted_job(machine, item["name"], history_data)
                     item["cancel_type"] = delete_info["type"]
@@ -4035,21 +5325,21 @@ def api_data():
                             item["reprint_label"] = done_duration_info["label"]
                         progress_info = estimate_cancel_progress(item["name"], history_data, completed_samples)
                         item.update(progress_info)
+                        if machine == "CNC":
+                            item.pop("estimated_bad_m2", None)
+                if status == "DONE":
+                    clear_finished_progress_state(item)
 
-                if status in ["PRINTING", "CUTTING"]:
+                if status in ["PRINTING", "CUTTING", "PAUSE"]:
+                    apply_live_print_progress(item)
+                    if status == "PAUSE" or is_active_paused(history_data):
+                        item["is_paused"] = True
+                        item["stage_key"] = "PAUSED"
+                        item["stage_label"] = "Đang dừng"
                     progress_label = active_progress_label(item.get("machine_meta"))
                     if progress_label:
                         item["progress_label"] = progress_label
-                    else:
-                        progress_info = estimate_active_progress(
-                            item["name"],
-                            history_data,
-                            completed_samples,
-                            item.get("machine_meta"),
-                        )
-                        if progress_info.get("progress_label"):
-                            item.update(progress_info)
-                    later_run = find_later_machine_run(
+                    later_run = None if item.get("is_paused") else find_later_machine_run(
                         rows,
                         name,
                         active_start_time(history_data, up_time),
@@ -4073,15 +5363,18 @@ def api_data():
                         item["active_reprint_waiting_done"] = True
                         item["reprint_needs_review"] = True
                         item["reprint_label"] = active_info["label"]
+                attach_cnc_progress_preview(item, status)
                 
                 if status in ["EXPORTED", "WRONG_DAY"]: result["EXPORTED"].append(item)
                 elif status == "RIP": result["RIP"].append(item)
-                elif status in ["PRINTING", "CUTTING"]:
+                elif status in ["PRINTING", "CUTTING", "PAUSE"]:
                     if item.get("stale_active"):
                         result["CANCELED"].append(item)
                     else:
                         result["RUNNING"].append(item)
-                elif status == "DONE": result["DONE"].append(item)
+                elif status == "DONE":
+                    result["DONE"].append(item)
+                    append_production_cancel_from_done_history(result, item, completed_samples)
                 elif status == "DELETED":
                     if item.get("is_production_error"):
                         result["CANCELED"].append(item)
@@ -4232,8 +5525,8 @@ def api_stats():
                     total_removed += 1
                     deleted_detail["summary"]["removed_jobs"] += 1
             
-            c.execute(f"SELECT file_name, updated_time, run_count, {meta_expr} FROM files WHERE status='DONE' AND {date_filter}")
-            for name, up_time, run_cnt, machine_meta_json in c.fetchall():
+            c.execute(f"SELECT file_name, updated_time, run_count, {meta_expr}, history FROM files WHERE status='DONE' AND {date_filter}")
+            for name, up_time, run_cnt, machine_meta_json, history_data in c.fetchall():
                 total_done += 1
                 try: r_cnt = int(run_cnt)
                 except: r_cnt = 1
@@ -4256,6 +5549,27 @@ def api_stats():
                 cus_detail["by_machine_m2"][machine] = cus_detail["by_machine_m2"].get(machine, 0.0) + billable_m2
                 if reprint_info["needs_review"]:
                     cus_detail["summary"]["reprint_jobs"] += 1
+                cancel_item = production_cancel_item_from_done_history(
+                    {
+                        "status": "DONE",
+                        "machine": machine,
+                        "name": name,
+                        "updated": up_time,
+                        "history": history_data,
+                    },
+                    completed_samples,
+                )
+                if cancel_item:
+                    total_cancelled += 1
+                    cancel_by_machine[machine] += 1
+                    cus_detail["summary"]["cancel_jobs"] += 1
+                    cus_detail["cancel_by_machine"][machine] = cus_detail["cancel_by_machine"].get(machine, 0) + 1
+                    bad_m2 = cancel_item.get("estimated_bad_m2")
+                    if bad_m2:
+                        total_bad_m2 += bad_m2
+                        cancel_bad_m2_by_machine[machine] += bad_m2
+                        cus_detail["summary"]["cancel_bad_m2"] += bad_m2
+                        cus_detail["cancel_bad_m2_by_machine"][machine] = cus_detail["cancel_bad_m2_by_machine"].get(machine, 0.0) + bad_m2
                 jobs_by_customer[cus_name] = jobs_by_customer.get(cus_name, 0) + 1
                 if billable_m2 > 0:
                     m2_by_customer[cus_name] = m2_by_customer.get(cus_name, 0.0) + billable_m2
@@ -4396,18 +5710,69 @@ def update_status():
         conn.execute("PRAGMA journal_mode=WAL;")
         c = conn.cursor()
         if file_hash:
-            c.execute("SELECT history FROM files WHERE file_hash=?", (file_hash,))
+            c.execute("SELECT status, history, run_count FROM files WHERE file_hash=?", (file_hash,))
         else:
-            c.execute("SELECT history FROM files WHERE file_name=? ORDER BY updated_time DESC LIMIT 1", (file_name,))
+            c.execute("SELECT status, history, run_count FROM files WHERE file_name=? ORDER BY updated_time DESC LIMIT 1", (file_name,))
         row = c.fetchone()
         if not row:
             conn.close()
             return jsonify({"success": False, "error": "Khong tim thay file can cap nhat."})
-        hist_str = row[0] if row and row[0] else "[]"
+        current_status = str(row[0] or "").upper()
+        hist_str = row[1] if row and row[1] else "[]"
+        try:
+            current_run_count = max(int(row[2] or 1), 1)
+        except (TypeError, ValueError):
+            current_run_count = 1
+        target_status = str(new_status or "").upper()
+        if target_status == "CONFIRM_RUNS":
+            try:
+                h_list = json.loads(hist_str)
+                if not isinstance(h_list, list):
+                    h_list = []
+                h_list.append({
+                    "status": current_status,
+                    "time": now(),
+                    "event": "ADMIN_CONFIRM_RUNS",
+                    "confirmed_runs": current_run_count,
+                    "reason": "Xác nhận số lần in/cắt đúng",
+                })
+                hist_str = json.dumps(h_list, ensure_ascii=False)
+            except Exception:
+                pass
+            updated_at = now()
+            if file_hash:
+                c.execute(
+                    "UPDATE files SET updated_time=?, history=? WHERE file_hash=?",
+                    (updated_at, hist_str, file_hash),
+                )
+            else:
+                c.execute(
+                    """
+                    UPDATE files
+                    SET updated_time=?, history=?
+                    WHERE rowid = (
+                        SELECT rowid FROM files WHERE file_name=? ORDER BY updated_time DESC LIMIT 1
+                    )
+                    """,
+                    (updated_at, hist_str, file_name),
+                )
+            if c.rowcount <= 0:
+                conn.close()
+                return jsonify({"success": False, "error": "Khong co row nao duoc cap nhat."})
+            conn.commit(); conn.close()
+            try: requests.get(SERVER_BROADCAST_URL, timeout=2)
+            except: pass
+            return jsonify({"success": True})
+        if current_status == "DELETED" and target_status == "DELETED":
+            conn.close()
+            return jsonify({"success": True, "already_current": True})
+        if current_status == "DONE" and target_status == "DELETED":
+            conn.close()
+            return jsonify({"success": False, "error": "Khong cho chuyen DONE sang Xoa/Huy bang nut thuong."})
         try:
             h_list = json.loads(hist_str)
-            event_name = "DONE" if new_status == "DONE" else ("DELETE" if new_status == "DELETED" else "EXPORT")
-            h_list.append({"status": new_status, "time": now(), "event": f"ADMIN_{event_name}"})
+            event_name = "DONE" if target_status == "DONE" else ("DELETE" if target_status == "DELETED" else "EXPORT")
+            h_list.append({"status": target_status, "time": now(), "event": f"ADMIN_{event_name}"})
             hist_str = json.dumps(h_list)
         except: pass
 
@@ -4415,7 +5780,7 @@ def update_status():
         if file_hash:
             c.execute(
                 "UPDATE files SET status=?, updated_time=?, zalo_sent=0, history=? WHERE file_hash=?",
-                (new_status, updated_at, hist_str, file_hash),
+                (target_status, updated_at, hist_str, file_hash),
             )
         else:
             c.execute(
@@ -4426,7 +5791,7 @@ def update_status():
                     SELECT rowid FROM files WHERE file_name=? ORDER BY updated_time DESC LIMIT 1
                 )
                 """,
-                (new_status, updated_at, hist_str, file_name),
+                (target_status, updated_at, hist_str, file_name),
             )
         if c.rowcount <= 0:
             conn.close()

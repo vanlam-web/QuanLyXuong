@@ -107,7 +107,36 @@ def parse_filename(file_name):
         "height_m": height_m,
         "quantity": quantity,
         "raw_name": name,
+        "dimension_source": "filename" if width_m and height_m else None,
     }
+
+def apply_machine_meta_dimensions(parsed, machine_meta):
+    if not isinstance(machine_meta, dict):
+        return parsed
+    if str(machine_meta.get("source_kind") or "").lower() != "rip_file_header":
+        return parsed
+
+    try:
+        width_cm = float(machine_meta.get("width_cm") or 0)
+        height_cm = float(machine_meta.get("height_cm") or 0)
+    except (TypeError, ValueError):
+        return parsed
+    if width_cm <= 0 or height_cm <= 0:
+        return parsed
+
+    updated = dict(parsed)
+    updated["width_m"] = round(width_cm / 100, 4)
+    updated["height_m"] = round(height_cm / 100, 4)
+    updated["dimension_source"] = "rip_file_header"
+    try:
+        area_m2 = float(machine_meta.get("area_m2") or 0)
+    except (TypeError, ValueError):
+        area_m2 = 0
+    if area_m2 > 0:
+        updated["area_m2"] = round(area_m2, 4)
+    if machine_meta.get("metadata_source"):
+        updated["dimension_metadata_source"] = machine_meta.get("metadata_source")
+    return updated
 
 
 def legacy_event_key(machine, row):
@@ -128,6 +157,7 @@ def make_payload(machine, row):
     raw_file_name = row["file_name"] or Path(row["file_path"] or "").name
     event_type = STATUS_TO_EVENT.get((row["status"] or "").upper(), row["status"] or "UNKNOWN")
     parsed = parse_filename(raw_file_name)
+    parsed = apply_machine_meta_dimensions(parsed, safe_json(row.get("machine_meta_json"), {}))
     parse_status = "ok" if parsed["width_m"] and parsed["height_m"] else "pending"
     event_key = legacy_event_key(machine, row)
     return {
@@ -171,16 +201,18 @@ def read_machine_rows(data_dir, machine, since_time, limit):
     if not db_path.exists():
         return []
 
-    query = """
-        select file_hash, file_name, file_path, machine, job_type, status,
-               created_time, updated_time, run_count, history
-        from files
-        where coalesce(updated_time, created_time, '') >= ?
-        order by coalesce(updated_time, created_time, '') asc
-        limit ?
-    """
     with connect_readonly(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        cols = {row["name"] for row in conn.execute("pragma table_info(files)").fetchall()}
+        meta_expr = "machine_meta_json" if "machine_meta_json" in cols else "'' as machine_meta_json"
+        query = f"""
+            select file_hash, file_name, file_path, machine, job_type, status,
+                   created_time, updated_time, run_count, history, {meta_expr}
+            from files
+            where coalesce(updated_time, created_time, '') >= ?
+            order by coalesce(updated_time, created_time, '') asc
+            limit ?
+        """
         return [dict(row) for row in conn.execute(query, (since_time, limit)).fetchall()]
 
 

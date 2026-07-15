@@ -90,7 +90,7 @@ class ServerReprintNoiseTests(unittest.TestCase):
     def test_ping_stores_client_instance_details(self):
         payload = server.PingPayload(
             machine="indecal",
-            version="V2.0.8_INDECAL_RENAME_GUARD",
+            version="V2.0.9_AUTO_UPDATE_IDLE",
             hostname="DECAL-PC",
             pid=4321,
             start_time="2026-07-13 16:30:00",
@@ -105,7 +105,7 @@ class ServerReprintNoiseTests(unittest.TestCase):
             info = dict(conn.execute("SELECT key, value FROM app_info").fetchall())
         finally:
             conn.close()
-        self.assertEqual(info["version"], "V2.0.8_INDECAL_RENAME_GUARD")
+        self.assertEqual(info["version"], "V2.0.9_AUTO_UPDATE_IDLE")
         self.assertEqual(info["hostname"], "DECAL-PC")
         self.assertEqual(info["pid"], "4321")
         self.assertEqual(info["start_time"], "2026-07-13 16:30:00")
@@ -285,6 +285,67 @@ class ServerReprintNoiseTests(unittest.TestCase):
         self.assertEqual(rows[0]["status"], "DELETED")
         self.assertEqual(history[-1]["cancel_type"], "production_cancel")
         self.assertAlmostEqual(history[-1]["progress_percent"], 65.08)
+
+    def test_cnc_pause_keeps_cutting_row_instead_of_deleted(self):
+        path = r"D:\CNC\2026-07-14\nsss_120x120.tap"
+        self.post_event("CUTTING", "2026-07-14 11:09:00", "evt-cnc-cut", path=path, machine="cnc")
+        self.post_event("PAUSE", "2026-07-14 11:09:04", "evt-cnc-pause", path=path, machine="cnc")
+
+        rows = self.rows("CNC")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "CUTTING")
+        history = json.loads(rows[0]["history"])
+        self.assertEqual(history[-1]["status"], "PAUSED")
+        self.assertEqual(history[-1]["event"], "PAUSE")
+
+    def test_cnc_cutting_after_pause_marks_resume(self):
+        path = r"D:\CNC\2026-07-14\nsss_120x120.tap"
+        self.post_event("CUTTING", "2026-07-14 11:09:00", "evt-cnc-cut", path=path, machine="cnc")
+        self.post_event("PAUSE", "2026-07-14 11:09:04", "evt-cnc-pause", path=path, machine="cnc")
+        self.post_event("CUTTING", "2026-07-14 11:09:14", "evt-cnc-resume", path=path, machine="cnc")
+
+        rows = self.rows("CNC")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "CUTTING")
+        history = json.loads(rows[0]["history"])
+        self.assertEqual(history[-1]["status"], "CUTTING")
+        self.assertTrue(history[-1]["resume_after_pause"])
+
+    def test_rollover_marks_previous_day_row_and_keeps_new_day_row_separate(self):
+        old_path = r"D:\CNC\2026-07-14\loi_f8_120x29.tap"
+        new_path = r"D:\CNC\2026-07-15\loi_f8_120x29_Ngay14.tap"
+
+        self.post_event("CUTTING", "2026-07-14 16:59:13", "evt-cnc-cut-old-day", path=old_path, machine="cnc")
+        self.post_event(
+            "ROLLOVER",
+            "2026-07-15 07:00:01",
+            "evt-cnc-rollover",
+            path=old_path,
+            machine="cnc",
+            machine_meta={
+                "rollover_source_path": old_path,
+                "rollover_source_name": "loi_f8_120x29.tap",
+                "rollover_target_path": new_path,
+                "rollover_target_name": "loi_f8_120x29_Ngay14.tap",
+                "rollover_reason": "new_day",
+            },
+        )
+        self.post_event("WRONG_DAY", "2026-07-15 07:00:02", "evt-cnc-new-day", path=new_path, machine="cnc")
+
+        rows = self.rows("CNC")
+        rows_by_path = {row["file_path"]: row for row in rows}
+        old_history = json.loads(rows_by_path[old_path]["history"])
+        old_meta = json.loads(rows_by_path[old_path]["machine_meta_json"])
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows_by_path[old_path]["status"], "ROLLED_OVER")
+        self.assertEqual(rows_by_path[new_path]["status"], "WRONG_DAY")
+        self.assertEqual(old_history[-1]["status"], "ROLLED_OVER")
+        self.assertEqual(old_history[-1]["event"], "Chuyển qua ngày mới")
+        self.assertEqual(old_history[-1]["new_path"], new_path)
+        self.assertEqual(old_meta["rollover_target_name"], "loi_f8_120x29_Ngay14.tap")
 
     def test_indecal_printing_after_recent_running_delete_revives_same_row(self):
         path = r"D:\2026-07-13\New Folder\14~xpppp1_122x164.prn"

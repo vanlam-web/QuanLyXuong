@@ -8,8 +8,10 @@ APP_ROOT = os.path.join(PROJECT_ROOT, "app")
 if APP_ROOT not in sys.path:
     sys.path.insert(0, APP_ROOT)
 
-from machine_file_meta import collect_machine_file_meta_for_server
+from machine_file_meta import collect_machine_file_meta_for_server, collect_rip_header_meta_for_server
 from qlx_config import DB_DIR
+
+DEFAULT_BACKFILL_SINCE = os.getenv("QLX_BACKFILL_SINCE", "2026-07-06")
 
 
 def has_useful_meta(raw):
@@ -21,11 +23,14 @@ def has_useful_meta(raw):
     return any(meta.get(key) not in (None, "", 0) for key in useful_keys)
 
 
-def needs_refresh(raw):
+def needs_refresh(raw, file_name="", machine=""):
     try:
         meta = json.loads(raw or "{}")
     except Exception:
         return True
+    lowered_name = str(file_name or "").lower()
+    if str(machine or "") in ("InDecal", "InBat") and lowered_name.endswith((".prn", ".prt")):
+        return str(meta.get("source_kind") or "").lower() != "rip_file_header"
     if not has_useful_meta(raw):
         return True
     source_kind = str(meta.get("source_kind") or "").lower()
@@ -33,7 +38,7 @@ def needs_refresh(raw):
     return source_kind == "rip_preview_bmp" or metadata_source.endswith(".prn.bmp")
 
 
-def backfill_machine(machine):
+def backfill_machine(machine, since=DEFAULT_BACKFILL_SINCE):
     db_path = os.path.join(DB_DIR, f"{machine}.db")
     if not os.path.exists(db_path):
         return {"machine": machine, "updated": 0, "missing": 0, "db": db_path}
@@ -43,19 +48,32 @@ def backfill_machine(machine):
         cols = [row[1] for row in conn.execute("PRAGMA table_info(files)")]
         if "machine_meta_json" not in cols:
             conn.execute("ALTER TABLE files ADD COLUMN machine_meta_json TEXT DEFAULT '{}'")
+        params = []
+        where = ""
+        if since:
+            where = "WHERE updated_time >= ?"
+            params.append(since)
         rows = conn.execute(
-            """
+            f"""
             SELECT file_hash, file_name, file_path, updated_time, machine_meta_json
             FROM files
+            {where}
             ORDER BY updated_time DESC
-            """
+            """,
+            params,
         ).fetchall()
         updated = 0
         missing = 0
+        checked = 0
         for file_hash, file_name, file_path, updated_time, machine_meta_json in rows:
-            if not needs_refresh(machine_meta_json):
+            if not needs_refresh(machine_meta_json, file_name, machine):
                 continue
-            meta = collect_machine_file_meta_for_server(machine, file_path, file_name, updated_time)
+            checked += 1
+            lowered_name = str(file_name or "").lower()
+            if machine in ("InDecal", "InBat") and lowered_name.endswith((".prn", ".prt")):
+                meta = collect_rip_header_meta_for_server(machine, file_path, file_name, updated_time)
+            else:
+                meta = collect_machine_file_meta_for_server(machine, file_path, file_name, updated_time)
             if not meta:
                 missing += 1
                 continue
@@ -65,13 +83,13 @@ def backfill_machine(machine):
             )
             updated += 1
         conn.commit()
-        return {"machine": machine, "updated": updated, "missing": missing, "db": db_path}
+        return {"machine": machine, "since": since, "checked": checked, "updated": updated, "missing": missing, "db": db_path}
     finally:
         conn.close()
 
 
 def main():
-    results = [backfill_machine(machine) for machine in ("InDecal", "InBat", "CNC")]
+    results = [backfill_machine(machine) for machine in ("InDecal", "InBat")]
     for result in results:
         print(result)
 

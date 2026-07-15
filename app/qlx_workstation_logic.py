@@ -2,6 +2,9 @@ import hashlib
 from dataclasses import dataclass
 from os import path
 import os
+import struct
+
+INBAT_PASS_FEED_CM = 2.4
 
 
 PRINT_MACHINES = {"inbat", "indecal"}
@@ -197,13 +200,63 @@ def plan_scan_events(
     return ScanPlan(events, processed_add, processed_discard, recent_moved_discard)
 
 
-def parse_inbat_printmon_snapshot(raw: bytes, current_job: str | None, current_switch: int | None):
+def parse_inbat_printfile_progress(raw: bytes):
+    if len(raw) < 272:
+        return {}
+    try:
+        status = struct.unpack_from("<I", raw, 260)[0]
+        current_pass = struct.unpack_from("<I", raw, 264)[0]
+        total_pass = struct.unpack_from("<I", raw, 268)[0]
+    except struct.error:
+        return {}
+    if status not in (1, 2) or total_pass <= 0 or current_pass < 0:
+        return {}
+    if current_pass > total_pass * 2:
+        return {}
+    return {
+        "current_pass": int(current_pass),
+        "total_pass": int(total_pass),
+        "progress_percent": min(100.0, max(0.0, current_pass * 100.0 / total_pass)),
+        "progress_source": "inbat_printfile_steps",
+    }
+
+def normalize_inbat_feed_progress(meta: dict):
+    if not isinstance(meta, dict):
+        return meta
+    try:
+        current_pass = float(meta.get("current_pass") or 0)
+        height_cm = float(meta.get("height_cm") or 0)
+        if height_cm <= 0 and meta.get("height_mm"):
+            height_cm = float(meta.get("height_mm") or 0) / 10.0
+    except Exception:
+        return meta
+    if current_pass <= 0 or height_cm <= 0:
+        return meta
+    corrected_total = max(1, int(round(height_cm / INBAT_PASS_FEED_CM)))
+    meta["printmon_current_pass"] = meta.get("current_pass")
+    meta["printmon_total_pass"] = meta.get("total_pass")
+    meta["current_pass"] = int(min(round(current_pass), corrected_total))
+    meta["total_pass"] = corrected_total
+    meta["progress_percent"] = min(100.0, max(0.0, current_pass * 100.0 / corrected_total))
+    meta["progress_source"] = "inbat_feed_length_steps"
+    meta["feed_step_cm"] = INBAT_PASS_FEED_CM
+    return meta
+
+def _inbat_event(event_type: str, file_path: str, meta: dict):
+    return (event_type, file_path, meta) if meta else (event_type, file_path)
+
+def parse_inbat_printmon_snapshot(
+    raw: bytes,
+    current_job: str | None,
+    current_switch: int | None,
+    current_progress_bucket: int | None = None,
+):
     lowered = raw.lower()
     ext_idx = lowered.find(b".prt")
     if ext_idx == -1:
         ext_idx = lowered.find(b".prn")
     if ext_idx == -1:
-        return None, (None, None)
+        return None, (None, None, None)
 
     start_idx = -1
     for idx in range(ext_idx, -1, -1):
@@ -211,20 +264,30 @@ def parse_inbat_printmon_snapshot(raw: bytes, current_job: str | None, current_s
             start_idx = idx - 1
             break
     if start_idx == -1:
-        return None, (current_job, current_switch)
+        return None, (current_job, current_switch, current_progress_bucket)
 
     file_path = raw[start_idx : ext_idx + 4].decode("utf-8", "ignore").strip()
     switch = next((byte for byte in raw[ext_idx + 4 :] if byte not in (0x00, 0x20, 0x09, 0x0A, 0x0D)), None)
     if switch not in (1, 2):
-        return None, (current_job, current_switch)
+        return None, (current_job, current_switch, current_progress_bucket)
+
+    meta = parse_inbat_printfile_progress(raw)
+    progress_bucket = None
+    if meta:
+        current_pass = float(meta.get("current_pass") or 0)
+        total_pass = float(meta.get("total_pass") or 0)
+        if current_pass > 0 and total_pass > 0:
+            progress_bucket = int(max(0, min(100, current_pass * 100.0 / total_pass)))
 
     if current_job != file_path:
         event_type = "PRINTING" if switch == 1 else "DONE"
-        return (event_type, file_path), (file_path, switch)
+        return _inbat_event(event_type, file_path, meta), (file_path, switch, progress_bucket)
 
     if current_switch == 1 and switch == 2:
-        return ("DONE", file_path), (file_path, 2)
-    return None, (file_path, switch)
+        return _inbat_event("DONE", file_path, meta), (file_path, 2, progress_bucket)
+    if switch == 1 and meta and progress_bucket != current_progress_bucket:
+        return _inbat_event("PRINTING", file_path, meta), (file_path, switch, progress_bucket)
+    return None, (file_path, switch, progress_bucket)
 
 
 def parse_indecal_log_lines(lines: list[str], current_job: str | None, current_base_id: str | None):

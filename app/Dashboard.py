@@ -2597,9 +2597,9 @@ HTML_TEMPLATE = """
         <main class="compact-main">
             <div class="main-tabs" role="tablist">
                 <button id="tab-production" class="main-tab active" onclick="switchMainTab('production')" title="Sản xuất">Sản xuất</button>
-                <button id="tab-attention" class="main-tab" onclick="switchMainTab('attention')" title="Việc chờ xử lý">Chờ xử lý <span id="attentionTabCount">0</span></button>
                 <button id="tab-flow" class="main-tab" onclick="switchMainTab('flow')" title="Báo cáo khách hàng và đơn hàng">Báo cáo</button>
                 <button id="tab-system" class="main-tab" onclick="switchMainTab('system')" title="Log, outbox, phiên bản, trạng thái hệ thống">Hệ thống</button>
+                <button id="tab-attention" class="main-tab" onclick="switchMainTab('attention')" title="Việc chờ xử lý">Chờ xử lý <span id="attentionTabCount">0</span></button>
             </div>
 
             <section id="main-tab-production" class="main-tab-panel active">

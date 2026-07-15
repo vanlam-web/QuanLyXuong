@@ -2366,6 +2366,7 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertIn('flex-wrap: wrap', html)
         self.assertIn("Chờ xử lý", html)
         self.assertIn('title="Việc chờ xử lý"', html)
+        self.assertLess(html.index('id="tab-system"'), html.index('id="tab-attention"'))
         self.assertIn('id="main-tab-technical"', html)
         self.assertNotIn('id="tab-technical"', html)
         self.assertNotIn('title="6 bước kỹ thuật">Kỹ thuật</button>', html)

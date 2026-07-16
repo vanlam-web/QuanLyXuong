@@ -60,6 +60,11 @@ class WorkstationAutoUpdateScriptTests(unittest.TestCase):
             json.dump(payload, f)
         return state_path
 
+    def read_default_auto_update_state(self):
+        state_path = os.path.join(self.local_dir, "auto_update_state.json")
+        with open(state_path, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+
     def old_stamp(self, seconds):
         return (datetime.now() - timedelta(seconds=seconds)).replace(microsecond=0).isoformat()
 
@@ -104,6 +109,16 @@ class WorkstationAutoUpdateScriptTests(unittest.TestCase):
         self.assertIn("BUSY InBat RUNNING", result.stdout)
         self.assertFalse(os.path.exists(os.path.join(self.local_dir, "QuanLyXuong.exe")))
 
+    def test_busy_skip_writes_auto_update_state_report(self):
+        result = self.run_script({"RUNNING": [{"machine": "InBat", "name": "job.prt"}]})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = self.read_default_auto_update_state()
+        self.assertEqual(state["lastOutcome"], "BUSY")
+        self.assertEqual(state["machine"], "InBat")
+        self.assertIn("RUNNING", state["lastMessage"])
+        self.assertTrue(state["lastBusyAt"])
+
     def test_print_machine_waits_for_rip_queue_to_empty(self):
         result = self.run_script({"RUNNING": [], "RIP": [{"machine": "InDecal", "name": "ready.prn"}]}, machine="InDecal")
 
@@ -136,6 +151,19 @@ class WorkstationAutoUpdateScriptTests(unittest.TestCase):
         with open(os.path.join(self.local_dir, "QuanLyXuong.exe"), "rb") as f:
             self.assertEqual(f.read(), b"new client")
         self.assertTrue(os.path.exists(os.path.join(self.local_dir, "BUILD_MANIFEST.json")))
+
+    def test_updated_client_writes_auto_update_state_report(self):
+        result = self.run_script({"RUNNING": []})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = self.read_default_auto_update_state()
+        self.assertEqual(state["lastOutcome"], "UPDATED")
+        self.assertEqual(state["lastMessage"], "copied only")
+        self.assertEqual(state["machine"], "InBat")
+        self.assertIn("QuanLyXuong.exe", state["sourcePath"])
+        self.assertEqual(state["sourceExpected"], state["sourceActual"])
+        self.assertEqual(state["sourceExpected"], state["localActual"])
+        self.assertEqual(state["sourceExpected"], state["legacyActual"])
 
     def test_idle_machine_updates_legacy_local_client_path(self):
         result = self.run_script({"RUNNING": []})

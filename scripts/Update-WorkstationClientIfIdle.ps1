@@ -102,7 +102,7 @@ function Read-IdleState([string]$Path) {
     if ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
         try {
             $loaded = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-            foreach ($prop in @("idleSince", "lastBusyAt", "pausedQuietSince", "lastPausedLogKey")) {
+            foreach ($prop in @("idleSince", "lastBusyAt", "pausedQuietSince", "lastPausedLogKey", "lastOutcome", "lastOutcomeAt", "lastMessage", "sourcePath", "sourceExpected", "sourceActual", "localActual", "legacyActual")) {
                 if (-not ($loaded.PSObject.Properties.Name -contains $prop)) {
                     $loaded | Add-Member -NotePropertyName $prop -NotePropertyValue ""
                 }
@@ -110,13 +110,49 @@ function Read-IdleState([string]$Path) {
             return $loaded
         } catch { }
     }
-    return [pscustomobject]@{ idleSince = ""; lastBusyAt = ""; pausedQuietSince = ""; lastPausedLogKey = "" }
+    return [pscustomobject]@{
+        idleSince = ""
+        lastBusyAt = ""
+        pausedQuietSince = ""
+        lastPausedLogKey = ""
+        lastOutcome = ""
+        lastOutcomeAt = ""
+        lastMessage = ""
+        sourcePath = ""
+        sourceExpected = ""
+        sourceActual = ""
+        localActual = ""
+        legacyActual = ""
+    }
 }
 
 function Save-IdleState([string]$Path, $State) {
     if (-not $Path) { return }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
     $State | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Set-IdleStateField($State, [string]$Name, $Value) {
+    if (-not $State) { return }
+    if ($State.PSObject.Properties.Name -contains $Name) {
+        $State.$Name = $Value
+    } else {
+        $State | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+    }
+}
+
+function Write-IdleStateOutcome([string]$Path, $State, [string]$Outcome, [string]$Message, [string]$MachineName, [string]$SourcePath = "", [string]$ExpectedHash = "", [string]$ActualSourceHash = "", [string]$LocalHash = "", [string]$LegacyHash = "") {
+    if (-not $State) { return }
+    Set-IdleStateField $State "lastOutcome" $Outcome
+    Set-IdleStateField $State "lastOutcomeAt" (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+    Set-IdleStateField $State "lastMessage" $Message
+    Set-IdleStateField $State "machine" $MachineName
+    Set-IdleStateField $State "sourcePath" $SourcePath
+    Set-IdleStateField $State "sourceExpected" $ExpectedHash
+    Set-IdleStateField $State "sourceActual" $ActualSourceHash
+    Set-IdleStateField $State "localActual" $LocalHash
+    Set-IdleStateField $State "legacyActual" $LegacyHash
+    Save-IdleState $Path $State
 }
 
 function Get-ManifestHash($Manifest, [string]$FileName) {
@@ -178,8 +214,13 @@ $localExe = Join-Path $LocalDir "QuanLyXuong.exe"
 $localManifest = Join-Path $LocalDir "BUILD_MANIFEST.json"
 $legacyExe = Join-Path (Split-Path -Parent $LocalDir) "QuanLyXuong_Local.exe"
 
-$statusData = Read-StatusData $StatusJsonPath $DashboardUrl $Machine
 $state = Read-IdleState $StatePath
+try {
+    $statusData = Read-StatusData $StatusJsonPath $DashboardUrl $Machine
+} catch {
+    Write-IdleStateOutcome $StatePath $state "FAILED" ("status read failed: {0}" -f $_.Exception.Message) $Machine
+    throw
+}
 $now = Get-Date
 
 $blockingQueue = ""
@@ -191,6 +232,7 @@ if ($blockingQueue) {
     $state.lastBusyAt = $now.ToString("s")
     $state.pausedQuietSince = ""
     $state.lastPausedLogKey = ""
+    Write-IdleStateOutcome $StatePath $state "BUSY" "blocked by $blockingQueue" $Machine
     Save-IdleState $StatePath $state
     Write-UpdateLog "BUSY $Machine $blockingQueue - skip update"
     exit 0
@@ -199,6 +241,7 @@ if ($blockingQueue) {
 if ($IdleSeconds -gt 0) {
     if (-not $state.idleSince) {
         $state.idleSince = $now.ToString("s")
+        Write-IdleStateOutcome $StatePath $state "WAIT_IDLE" "idle timer started" $Machine
         Save-IdleState $StatePath $state
         Write-UpdateLog "WAIT_IDLE $Machine - idle timer started"
         exit 0
@@ -206,6 +249,7 @@ if ($IdleSeconds -gt 0) {
     $idleSince = [datetime]::Parse($state.idleSince)
     $idleAge = ($now - $idleSince).TotalSeconds
     if ($idleAge -lt $IdleSeconds) {
+        Write-IdleStateOutcome $StatePath $state "WAIT_IDLE" ("{0:n0}/{1}s" -f $idleAge, $IdleSeconds) $Machine
         Write-UpdateLog ("WAIT_IDLE {0} - {1:n0}/{2}s" -f $Machine, $idleAge, $IdleSeconds)
         exit 0
     }
@@ -215,6 +259,7 @@ if ($IdleSeconds -gt 0) {
         if (-not $state.pausedQuietSince) {
             $state.pausedQuietSince = $now.ToString("s")
             $state.lastPausedLogKey = $pausedLogKey
+            Write-IdleStateOutcome $StatePath $state "WAIT_PAUSE_QUIET" "pause quiet timer started" $Machine
             Save-IdleState $StatePath $state
             Write-UpdateLog "WAIT_PAUSE_QUIET $Machine - pause quiet timer started"
             exit 0
@@ -222,6 +267,7 @@ if ($IdleSeconds -gt 0) {
         if ($state.lastPausedLogKey -ne $pausedLogKey) {
             $state.pausedQuietSince = $now.ToString("s")
             $state.lastPausedLogKey = $pausedLogKey
+            Write-IdleStateOutcome $StatePath $state "WAIT_PAUSE_QUIET" "pause log changed" $Machine
             Save-IdleState $StatePath $state
             Write-UpdateLog "WAIT_PAUSE_QUIET $Machine - pause log changed"
             exit 0
@@ -229,17 +275,24 @@ if ($IdleSeconds -gt 0) {
         $pausedQuietSince = [datetime]::Parse($state.pausedQuietSince)
         $pausedQuietAge = ($now - $pausedQuietSince).TotalSeconds
         if ($pausedQuietAge -lt $IdleSeconds) {
+            Write-IdleStateOutcome $StatePath $state "WAIT_PAUSE_QUIET" ("{0:n0}/{1}s" -f $pausedQuietAge, $IdleSeconds) $Machine
             Write-UpdateLog ("WAIT_PAUSE_QUIET {0} - {1:n0}/{2}s" -f $Machine, $pausedQuietAge, $IdleSeconds)
             exit 0
         }
     } else {
         $state.pausedQuietSince = ""
         $state.lastPausedLogKey = ""
+        Write-IdleStateOutcome $StatePath $state "WAIT_IDLE" "pause cleared" $Machine
         Save-IdleState $StatePath $state
     }
 }
 
-$source = Resolve-UpdateSource $NasDistPath
+try {
+    $source = Resolve-UpdateSource $NasDistPath
+} catch {
+    Write-IdleStateOutcome $StatePath $state "FAILED" ("source read failed: {0}" -f $_.Exception.Message) $Machine
+    throw
+}
 $sourceExe = $source.Exe
 $sourceManifest = $source.ManifestPath
 $expected = $source.Expected
@@ -247,28 +300,45 @@ $expected = $source.Expected
 if (Test-Path -LiteralPath $localExe -PathType Leaf) {
     $current = (Get-FileHash -LiteralPath $localExe -Algorithm SHA256).Hash.ToUpperInvariant()
     if ($current -eq $expected) {
+        $legacyActual = ""
+        if (Test-Path -LiteralPath $legacyExe -PathType Leaf) {
+            $legacyActual = (Get-FileHash -LiteralPath $legacyExe -Algorithm SHA256).Hash.ToUpperInvariant()
+        }
+        Write-IdleStateOutcome $StatePath $state "UP_TO_DATE" "local hash already matches manifest" $Machine $sourceExe $expected $source.Actual $current $legacyActual
         Write-UpdateLog "UP_TO_DATE $Machine $($current.Substring(0, 12))"
         exit 0
     }
 }
 
-Stop-LocalClient
-Copy-Item -LiteralPath $sourceExe -Destination $localExe -Force
-Copy-Item -LiteralPath $sourceManifest -Destination $localManifest -Force
-if ([System.IO.Path]::GetFullPath($legacyExe) -ne [System.IO.Path]::GetFullPath($localExe)) {
-    Copy-Item -LiteralPath $sourceExe -Destination $legacyExe -Force
-}
+try {
+    Stop-LocalClient
+    Copy-Item -LiteralPath $sourceExe -Destination $localExe -Force
+    Copy-Item -LiteralPath $sourceManifest -Destination $localManifest -Force
+    if ([System.IO.Path]::GetFullPath($legacyExe) -ne [System.IO.Path]::GetFullPath($localExe)) {
+        Copy-Item -LiteralPath $sourceExe -Destination $legacyExe -Force
+    }
 
-$actual = (Get-FileHash -LiteralPath $localExe -Algorithm SHA256).Hash.ToUpperInvariant()
-if ($actual -ne $expected) {
-    Write-UpdateLog "FAILED $Machine hash mismatch"
-    throw "Local client hash mismatch. expected=$expected actual=$actual"
-}
+    $actual = (Get-FileHash -LiteralPath $localExe -Algorithm SHA256).Hash.ToUpperInvariant()
+    $legacyActual = ""
+    if (Test-Path -LiteralPath $legacyExe -PathType Leaf) {
+        $legacyActual = (Get-FileHash -LiteralPath $legacyExe -Algorithm SHA256).Hash.ToUpperInvariant()
+    }
+    if ($actual -ne $expected) {
+        Write-IdleStateOutcome $StatePath $state "FAILED" "local client hash mismatch" $Machine $sourceExe $expected $source.Actual $actual $legacyActual
+        Write-UpdateLog "FAILED $Machine hash mismatch"
+        throw "Local client hash mismatch. expected=$expected actual=$actual"
+    }
 
-if ($NoStart) {
-    Write-UpdateLog "UPDATED $Machine copied only $($actual.Substring(0, 12))"
-    exit 0
-}
+    if ($NoStart) {
+        Write-IdleStateOutcome $StatePath $state "UPDATED" "copied only" $Machine $sourceExe $expected $source.Actual $actual $legacyActual
+        Write-UpdateLog "UPDATED $Machine copied only $($actual.Substring(0, 12))"
+        exit 0
+    }
 
-Start-Process -FilePath $localExe -WorkingDirectory $LocalDir -WindowStyle Hidden
-Write-UpdateLog "UPDATED $Machine started $($actual.Substring(0, 12))"
+    Start-Process -FilePath $localExe -WorkingDirectory $LocalDir -WindowStyle Hidden
+    Write-IdleStateOutcome $StatePath $state "UPDATED" "copied and started" $Machine $sourceExe $expected $source.Actual $actual $legacyActual
+    Write-UpdateLog "UPDATED $Machine started $($actual.Substring(0, 12))"
+} catch {
+    Write-IdleStateOutcome $StatePath $state "FAILED" $_.Exception.Message $Machine $sourceExe $expected $source.Actual
+    throw
+}

@@ -29,6 +29,16 @@ class RuntimeHealthScriptTests(unittest.TestCase):
         self.assertIn('Assert-SingleProcess "Dashboard_Local"', script)
         self.assertIn('Assert-SingleProcess "cnc_legacy_bridge"', script)
 
+    def test_restart_dashboard_verifies_zero_before_start_and_one_after_start(self):
+        path = os.path.join(PROJECT_ROOT, "scripts", "Restart-DashboardV2.ps1")
+        with open(path, "r", encoding="utf-8") as handle:
+            script = handle.read()
+
+        self.assertIn('Assert-ProcessCount "Dashboard_Local" 0', script)
+        self.assertIn('Assert-ProcessCount "Dashboard_Local" 1', script)
+        self.assertIn("Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop", script)
+        self.assertIn('throw "Dashboard process count mismatch', script)
+
 
 if __name__ == "__main__":
     unittest.main()

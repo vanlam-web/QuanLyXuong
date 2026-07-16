@@ -16,7 +16,7 @@ from machine_file_meta import collect_machine_file_meta_for_server
 SERVER_VERSION = "V7.6.7_INSTANCE_PING"
 MACHINES = dict(InBat="PRINT", InDecal="PRINT", CNC="CUT")
 ZALO_TARGET = os.getenv("SERVER_ZALO_TARGET", "")
-LOG_FILE = r"C:\QuanLyXuong\Server_Log.txt"
+LOG_FILE = os.getenv("QLX_SERVER_LOG_FILE", r"C:\QuanLyXuong\Server_Log.txt")
 NAS_EXE_PATH = NAS_SERVER_EXE_PATH
 CREATE_NO_WINDOW = 0x08000000  
 

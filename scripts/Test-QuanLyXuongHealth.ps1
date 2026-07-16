@@ -62,6 +62,30 @@ function Test-AnyProcess([string[]]$Names) {
     return $false
 }
 
+function Get-ProcessDetails([string]$Name) {
+    @(Get-Process -Name $Name -ErrorAction SilentlyContinue | ForEach-Object {
+        $path = ""
+        try { $path = $_.Path } catch { $path = "" }
+        "pid=$($_.Id) path=$path"
+    })
+}
+
+function Test-ProcessCountAtMostOne([string]$Name, [ref]$Detail) {
+    $items = @(Get-Process -Name $Name -ErrorAction SilentlyContinue)
+    if ($items.Count -le 1) {
+        $Detail.Value = "$Name count=$($items.Count)"
+        return $true
+    }
+    $duplicateLabels = @{
+        "server_Local" = "Duplicate process server_Local"
+        "Dashboard_Local" = "Duplicate process Dashboard_Local"
+        "cnc_legacy_bridge" = "Duplicate process cnc_legacy_bridge"
+    }
+    $prefix = if ($duplicateLabels.ContainsKey($Name)) { $duplicateLabels[$Name] } else { "Duplicate process $Name" }
+    $Detail.Value = "$prefix count=$($items.Count): $((Get-ProcessDetails $Name) -join '; ')"
+    return $false
+}
+
 function Get-OutboxPendingCount([string]$DbPath) {
     $script = "import sqlite3, sys; conn=sqlite3.connect(sys.argv[1]); print(conn.execute(sys.argv[2]).fetchone()[0])"
     $sql = "SELECT COUNT(*) FROM outbox_events WHERE status='pending'"
@@ -117,6 +141,15 @@ if ($Role -in @("All", "Server")) {
     } else {
         Add-Check $checks "Process Auto_CRM not required" $true "QLX_ENABLE_AUTO_CRM=0"
     }
+
+    $serverDupDetail = ""
+    Add-Check $checks "Process server duplicate guard" (Test-ProcessCountAtMostOne "server_Local" ([ref]$serverDupDetail)) $serverDupDetail
+
+    $dashboardDupDetail = ""
+    Add-Check $checks "Process Dashboard duplicate guard" (Test-ProcessCountAtMostOne "Dashboard_Local" ([ref]$dashboardDupDetail)) $dashboardDupDetail
+
+    $cncDupDetail = ""
+    Add-Check $checks "Process CNC bridge duplicate guard" (Test-ProcessCountAtMostOne "cnc_legacy_bridge" ([ref]$cncDupDetail)) $cncDupDetail
 }
 if ($Role -in @("All", "Machine")) {
     Add-Check $checks "Process QuanLyXuong" (Test-AnyProcess @("QuanLyXuong_Local", "QuanLyXuong")) "QuanLyXuong_Local/QuanLyXuong"

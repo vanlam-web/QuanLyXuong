@@ -132,6 +132,33 @@ class ServerReprintNoiseTests(unittest.TestCase):
         self.assertEqual(info["start_time"], "2026-07-13 16:30:00")
         self.assertEqual(info["instance_id"], "DECAL-PC-4321-abcd")
 
+    def test_ping_stores_cnc_bridge_and_ncstudio_health(self):
+        payload = server.PingPayload(
+            machine="cnc",
+            version="V2.1.0_TEST_CNC_BRIDGE",
+            hostname="CNC qua bridge V1",
+            cnc_bridge_source_path=r"\\CNC\CNC\CLIENT_CNC\file_history.csv",
+            cnc_bridge_seen_at="2026-07-13 14:00:00",
+            cnc_ncstudio_state="EXITED",
+            cnc_ncstudio_log_mtime="2026-07-13 13:55:00",
+            cnc_ncstudio_last_event_time="2026-07-13 13:55:00",
+            cnc_ncstudio_current_job=r"D:\CNC\job.tap",
+        )
+
+        result = server.ping_client(payload)
+
+        self.assertEqual(result["status"], "ok")
+        conn = sqlite3.connect(os.path.join(self.temp_dir.name, "CNC.db"))
+        try:
+            info = dict(conn.execute("SELECT key, value FROM app_info").fetchall())
+        finally:
+            conn.close()
+        self.assertEqual(info["version"], "V2.1.0_TEST_CNC_BRIDGE")
+        self.assertEqual(info["cnc_bridge_source_path"], r"\\CNC\CNC\CLIENT_CNC\file_history.csv")
+        self.assertEqual(info["cnc_bridge_seen_at"], "2026-07-13 14:00:00")
+        self.assertEqual(info["cnc_ncstudio_state"], "EXITED")
+        self.assertEqual(info["cnc_ncstudio_current_job"], r"D:\CNC\job.tap")
+
     def test_printing_after_done_creates_reprint_row_waiting_for_second_done(self):
         self.post_event("PRINTING", "2026-07-10 15:26:40", "evt-print-1")
         self.post_event("DONE", "2026-07-10 15:27:57", "evt-done-1")

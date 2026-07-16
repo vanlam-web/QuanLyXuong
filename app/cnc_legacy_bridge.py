@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import socket
 import time
 from datetime import datetime
@@ -19,6 +20,8 @@ DEFAULT_NCSTUDIO_DYN = r"\\CNC\Ncstudio V5.5.60\NCSTUDIO.DYN"
 DEFAULT_DYN_STALE_SECONDS = 60
 DEFAULT_STATE = r"C:\QuanLyXuong\Data\cnc_legacy_bridge_state.json"
 DEFAULT_API = "http://127.0.0.1:8000"
+NCSTUDIO_RUNNING_HINTS = ("Initiate a machining task", "Initiate a simulation")
+NCSTUDIO_EXIT_HINTS = ("正常完毕", "中断终止", "printing is cancelled", "cancelled", "aborted", "abort")
 
 
 def now():
@@ -27,6 +30,14 @@ def now():
 
 def print_log(message):
     print(f"[{now()}] {message}", flush=True)
+
+
+def _last_non_empty_line(text):
+    for line in reversed((text or "").splitlines()):
+        cleaned = line.strip()
+        if cleaned:
+            return cleaned
+    return ""
 
 
 def load_state(path):
@@ -48,12 +59,65 @@ def save_state(path, state):
         print_log(f"Cannot save state: {exc}")
 
 
-def post_ping(api_base, source_path):
+def read_ncstudio_health(path=DEFAULT_NCSTUDIO_LOG, now_dt=None, stale_seconds=DEFAULT_DYN_STALE_SECONDS):
+    now_dt = now_dt or datetime.now()
+    health = {
+        "cnc_ncstudio_log_path": path or "",
+        "cnc_ncstudio_log_exists": "0",
+        "cnc_ncstudio_log_mtime": "",
+        "cnc_ncstudio_state": "UNKNOWN",
+        "cnc_ncstudio_last_line": "",
+        "cnc_ncstudio_last_event_time": "",
+        "cnc_ncstudio_current_job": "",
+    }
+    if not path or not os.path.exists(path):
+        return health
+    try:
+        health["cnc_ncstudio_log_exists"] = "1"
+        mtime = os.path.getmtime(path)
+        health["cnc_ncstudio_log_mtime"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+        is_stale = bool(stale_seconds and (now_dt.timestamp() - mtime) >= max(10, int(stale_seconds or 0)))
+        if is_stale:
+            health["cnc_ncstudio_state"] = "STALE"
+        with open(path, "rb") as handle:
+            text = handle.read().decode("gb18030", errors="ignore")
+        last_line = _last_non_empty_line(text)
+        if last_line:
+            health["cnc_ncstudio_last_line"] = last_line[-500:]
+            match = re.search(r"(20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})", last_line)
+            if match:
+                health["cnc_ncstudio_last_event_time"] = match.group(1)
+            if not is_stale and any(hint in last_line for hint in NCSTUDIO_RUNNING_HINTS):
+                health["cnc_ncstudio_state"] = "RUNNING"
+                events = parse_cnc_log_events([last_line], state={})
+                if events:
+                    health["cnc_ncstudio_current_job"] = events[0].get("path") or ""
+            elif not is_stale and any(hint.lower() in last_line.lower() for hint in NCSTUDIO_EXIT_HINTS):
+                if health["cnc_ncstudio_state"] != "STALE":
+                    health["cnc_ncstudio_state"] = "EXITED"
+            elif not is_stale:
+                health["cnc_ncstudio_state"] = "IDLE_OR_UNKNOWN"
+    except Exception as exc:
+        health["cnc_ncstudio_state"] = "UNKNOWN"
+        health["cnc_ncstudio_last_line"] = str(exc)
+    return health
+
+
+def build_ping_payload(source_path, health=None):
     payload = {
         "machine": "cnc",
         "version": BRIDGE_VERSION,
         "hostname": "CNC qua bridge V1",
+        "cnc_bridge_source_path": source_path or "",
+        "cnc_bridge_seen_at": now(),
     }
+    if isinstance(health, dict):
+        payload.update(health)
+    return payload
+
+
+def post_ping(api_base, source_path, health=None):
+    payload = build_ping_payload(source_path, health)
     res = requests.post(f"{api_base}/api/ping", json=payload, timeout=5)
     res.raise_for_status()
     print_log(f"Ping V2 OK from {source_path}")
@@ -231,7 +295,8 @@ def run_once(args, state):
         print_log(f"NCStudio log not found: {ncstudio_log}")
         return state
 
-    post_ping(args.api, args.history if history_exists else ncstudio_log)
+    health = read_ncstudio_health(ncstudio_log, stale_seconds=getattr(args, "dyn_stale_seconds", DEFAULT_DYN_STALE_SECONDS))
+    post_ping(args.api, args.history if history_exists else ncstudio_log, health)
     events = []
     if history_exists:
         text = read_new_text(args.history, state, import_existing=args.import_existing)

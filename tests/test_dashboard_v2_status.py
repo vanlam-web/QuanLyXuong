@@ -101,6 +101,23 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertEqual(status["outboxes"][0]["pending"], 1)
         self.assertTrue(any("pending=1" in warning for warning in status["warnings"]))
 
+    def test_v2_status_reads_cnc_bridge_health_fields(self):
+        self.make_machine_db("CNC")
+        db_path = os.path.join(self.temp_dir.name, "CNC.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES ('cnc_ncstudio_state', 'RUNNING')")
+        conn.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES ('cnc_ncstudio_log_mtime', '2026-07-13 13:50:32')")
+        conn.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES ('cnc_ncstudio_current_job', 'D:\\CNC\\job.tap')")
+        conn.commit()
+        conn.close()
+
+        status = Dashboard.get_v2_status_snapshot(self.temp_dir.name)
+
+        cnc = next(item for item in status["machines"] if item["machine"] == "CNC")
+        self.assertEqual(cnc["cnc_ncstudio_state"], "RUNNING")
+        self.assertEqual(cnc["cnc_ncstudio_log_mtime"], "2026-07-13 13:50:32")
+        self.assertEqual(cnc["cnc_ncstudio_current_job"], "D:\\CNC\\job.tap")
+
     def test_v2_status_reports_duplicate_runtime_processes(self):
         self.make_machine_db("InBat")
         old_expected = getattr(Dashboard, "EXPECTED_MACHINE_VERSIONS", None)
@@ -2476,6 +2493,8 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertIn("name: 'Tiến trình V2'", html)
         self.assertIn("runtimeProcesses", html)
         self.assertIn("Bản mong đợi", html)
+        self.assertIn(".machine-health", html)
+        self.assertIn("NcStudio:", html)
         self.assertIn('<div class="system-note-row"><span>Máy đang mở</span>', html)
         self.assertIn("Xuất file", html)
         self.assertIn('class="flow-dashboard"', html)

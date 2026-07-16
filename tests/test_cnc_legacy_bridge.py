@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -12,11 +13,52 @@ for path in (PROJECT_ROOT, APP_ROOT):
         sys.path.insert(0, path)
 
 import cnc_legacy_bridge
-from cnc_legacy_bridge import legacy_path, parse_history_lines, read_dyn_progress_event
+from cnc_legacy_bridge import build_ping_payload, legacy_path, parse_history_lines, read_dyn_progress_event, read_ncstudio_health
 from cnc_log_parser import parse_cnc_log_events
 
 
 class CncLegacyBridgeTests(unittest.TestCase):
+    def test_ncstudio_health_detects_running_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ncstudio = os.path.join(tmp, "NCSTUDIO.LOG")
+            with open(ncstudio, "w", encoding="gb18030") as handle:
+                handle.write("M\t2026-07-13 13:50:32\tInitiate a machining task: 'D:\\CNC\\2026-07-13\\XXD.tap', from beginning to end\n")
+            mtime = datetime(2026, 7, 13, 13, 50, 32).timestamp()
+            os.utime(ncstudio, (mtime, mtime))
+
+            health = read_ncstudio_health(ncstudio, now_dt=datetime(2026, 7, 13, 13, 50, 45), stale_seconds=60)
+
+        self.assertEqual(health["cnc_ncstudio_state"], "RUNNING")
+        self.assertEqual(health["cnc_ncstudio_current_job"], r"D:\CNC\2026-07-13\XXD.tap")
+        self.assertEqual(health["cnc_ncstudio_last_event_time"], "2026-07-13 13:50:32")
+
+    def test_ncstudio_health_detects_stale_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ncstudio = os.path.join(tmp, "NCSTUDIO.LOG")
+            with open(ncstudio, "w", encoding="gb18030") as handle:
+                handle.write("M\t2026-07-13 13:50:32\tInitiate a machining task: 'D:\\CNC\\2026-07-13\\XXD.tap', from beginning to end\n")
+            mtime = datetime(2026, 7, 13, 13, 50, 32).timestamp()
+            os.utime(ncstudio, (mtime, mtime))
+
+            health = read_ncstudio_health(ncstudio, now_dt=datetime(2026, 7, 13, 14, 5, 0), stale_seconds=60)
+
+        self.assertEqual(health["cnc_ncstudio_state"], "STALE")
+        self.assertEqual(health["cnc_ncstudio_log_mtime"], "2026-07-13 13:50:32")
+
+    def test_build_ping_payload_includes_ncstudio_health(self):
+        payload = build_ping_payload(
+            r"\\CNC\CNC\CLIENT_CNC\file_history.csv",
+            {
+                "cnc_ncstudio_state": "EXITED",
+                "cnc_ncstudio_log_mtime": "2026-07-13 14:20:00",
+            },
+        )
+
+        self.assertEqual(payload["machine"], "cnc")
+        self.assertEqual(payload["version"], cnc_legacy_bridge.BRIDGE_VERSION)
+        self.assertEqual(payload["cnc_bridge_source_path"], r"\\CNC\CNC\CLIENT_CNC\file_history.csv")
+        self.assertEqual(payload["cnc_ncstudio_state"], "EXITED")
+
     def test_parse_history_lines_keeps_comma_in_legacy_csv_names(self):
         rows = parse_history_lines(
             "2026-07-09 14:27:24,CUTTING,ttt_to_mui1,5,ttt_to_mui1,5\n"
@@ -60,7 +102,7 @@ class CncLegacyBridgeTests(unittest.TestCase):
             original_ping = cnc_legacy_bridge.post_ping
             original_post = cnc_legacy_bridge.post_event
             try:
-                cnc_legacy_bridge.post_ping = lambda api, source: None
+                cnc_legacy_bridge.post_ping = lambda api, source, health=None: None
                 cnc_legacy_bridge.post_event = lambda api, event: posted.append(event)
                 cnc_legacy_bridge.run_once(args, {})
             finally:
@@ -95,7 +137,7 @@ class CncLegacyBridgeTests(unittest.TestCase):
             original_ping = cnc_legacy_bridge.post_ping
             original_post = cnc_legacy_bridge.post_event
             try:
-                cnc_legacy_bridge.post_ping = lambda api, source: None
+                cnc_legacy_bridge.post_ping = lambda api, source, health=None: None
                 cnc_legacy_bridge.post_event = lambda api, event: posted.append(event)
                 with patch("cnc_legacy_bridge.find_existing_tap", return_value=tap):
                     cnc_legacy_bridge.run_once(args, {"current_cut_path": r"D:\CNC\2026-07-14\nsss_120x120.tap"})
@@ -136,7 +178,7 @@ class CncLegacyBridgeTests(unittest.TestCase):
             original_ping = cnc_legacy_bridge.post_ping
             original_post = cnc_legacy_bridge.post_event
             try:
-                cnc_legacy_bridge.post_ping = lambda api, source: None
+                cnc_legacy_bridge.post_ping = lambda api, source, health=None: None
                 cnc_legacy_bridge.post_event = lambda api, event: posted.append(event)
                 with patch("cnc_legacy_bridge.find_existing_tap", return_value=tap):
                     cnc_legacy_bridge.run_once(args, {"current_cut_path": r"D:\CNC\2026-07-14\nsss_120x120.tap"})

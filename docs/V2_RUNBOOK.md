@@ -139,6 +139,13 @@ C:\QuanLyXuong\Client\auto_update.log
 C:\QuanLyXuong\Client\auto_update_state.json
 ```
 
+`auto_update_state.json` giu trang thai lan chay gan nhat:
+
+- `lastOutcome`: `BUSY`, `WAIT_IDLE`, `WAIT_PAUSE_QUIET`, `UP_TO_DATE`, `UPDATED`, `FAILED`
+- `lastMessage`: ly do ngan cho lan chay do
+- `sourceExpected` / `sourceActual` / `localActual`: hash de doi chieu
+- `machine`, `sourcePath`, `lastOutcomeAt`: may, nguon, thoi diem
+
 Neu muon bridge chay dry-run loop cung luc:
 
 ```powershell
@@ -207,6 +214,8 @@ Tab chinh:
 - `Cho xu ly`: cac canh bao can xem lai, vi du thieu tin hieu ket thuc, DONE qua nhanh, chua ro % hong. Tab nay nam cuoi thanh tab chinh de khong chen giua san xuat va bao cao.
 - `Bao cao`: top khach hang va bieu do theo thoi gian. Bam cot khach hang de loc rieng khach do. Nut `So luong/m2` doi ca bieu do, thong ke tong, loi va top khach.
 - `He thong`: gom he thong va log. Chon nguon tren mot hang: Outbox, Phien ban, Ghi chu, server, dashboard, machine, qcvl_bridge. Log moi nhat nam tren cung trong khung xem log.
+- Trong `Phien ban`, cot `Bản mong đợi` va `Khớp` cho biet may dang chay co dung ban khong.
+- CNC trong sidebar co them `Bridge`, `NcStudio`, `Log` de tach LAN may, bridge va trang thai NcStudio.
 
 Sidebar:
 

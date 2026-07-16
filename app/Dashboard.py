@@ -1191,6 +1191,15 @@ def inspect_machine_db(machine, data_dir=DB_DIR):
         "pid": "",
         "start_time": "",
         "instance_id": "",
+        "cnc_bridge_source_path": "",
+        "cnc_bridge_seen_at": "",
+        "cnc_ncstudio_log_path": "",
+        "cnc_ncstudio_log_exists": "",
+        "cnc_ncstudio_log_mtime": "",
+        "cnc_ncstudio_state": "",
+        "cnc_ncstudio_last_line": "",
+        "cnc_ncstudio_last_event_time": "",
+        "cnc_ncstudio_current_job": "",
         "online": False,
         "network_online": False,
         "online_label": "CHUA MO",
@@ -1247,6 +1256,15 @@ def inspect_machine_db(machine, data_dir=DB_DIR):
             info["pid"] = app_info.get("pid", "")
             info["start_time"] = app_info.get("start_time", "")
             info["instance_id"] = app_info.get("instance_id", "")
+            info["cnc_bridge_source_path"] = app_info.get("cnc_bridge_source_path", "")
+            info["cnc_bridge_seen_at"] = app_info.get("cnc_bridge_seen_at", "")
+            info["cnc_ncstudio_log_path"] = app_info.get("cnc_ncstudio_log_path", "")
+            info["cnc_ncstudio_log_exists"] = app_info.get("cnc_ncstudio_log_exists", "")
+            info["cnc_ncstudio_log_mtime"] = app_info.get("cnc_ncstudio_log_mtime", "")
+            info["cnc_ncstudio_state"] = app_info.get("cnc_ncstudio_state", "")
+            info["cnc_ncstudio_last_line"] = app_info.get("cnc_ncstudio_last_line", "")
+            info["cnc_ncstudio_last_event_time"] = app_info.get("cnc_ncstudio_last_event_time", "")
+            info["cnc_ncstudio_current_job"] = app_info.get("cnc_ncstudio_current_job", "")
             if info["last_ping"]:
                 last_ping_dt = datetime.strptime(info["last_ping"], "%Y-%m-%d %H:%M:%S")
                 age_seconds = (datetime.now() - last_ping_dt).total_seconds()
@@ -1574,6 +1592,9 @@ HTML_TEMPLATE = """
         .machine-kpi { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; color: #d6dce6; font-size: 11px; }
         .machine-kpi span { display: inline-flex; align-items: baseline; gap: 3px; line-height: 1.2; }
         .machine-kpi strong { color: #fff; font-size: 13px; }
+        .machine-health { display: grid; gap: 2px; margin-top: 6px; font-size: 11px; color: #d6dce6; }
+        .machine-health span { display: inline-flex; gap: 4px; flex-wrap: wrap; align-items: baseline; }
+        .machine-health strong { color: #fff; }
         .machine-more { padding: 0 10px 10px; border-top: 1px solid #263044; }
         .machine-card summary::after { content: 'Chi tiết'; color: #93c5fd; display: block; margin-top: 8px; font-size: 11px; font-weight: 800; }
         .machine-card[open] summary::after { content: 'Thu gọn'; color: #fbbf24; }
@@ -3140,6 +3161,12 @@ HTML_TEMPLATE = """
                     const lastPing = m.last_ping ? `${escapeHtml(m.last_ping)} (${escapeHtml(formatAge(m.ping_age_seconds))})` : (networkOnly ? 'mạng thấy hostname/IP, chưa có heartbeat V2' : 'chưa thấy máy mở/ping');
                     const latestMachine = m.latest_machine_update || 'chưa có log máy';
                     const latestAdmin = m.latest_admin_update || 'chưa có thao tác web';
+                    const cncHealth = m.machine === 'CNC' ? `
+                        <div class="machine-health">
+                            <span><span>Bridge:</span> <strong>${escapeHtml(m.version || 'chưa báo')}</strong></span>
+                            <span><span>NcStudio:</span> <strong>${escapeHtml(m.cnc_ncstudio_state || 'chưa rõ')}</strong></span>
+                            <span><span>Log:</span> <strong>${escapeHtml(m.cnc_ncstudio_log_mtime || 'chưa đọc')}</strong></span>
+                        </div>` : '';
                     const runningFile = getRunningFileForMachine(m.machine);
                     const runningThumb = runningFile ? (runningFile.preview_url || (runningFile.hash ? `/thumbs/${runningFile.hash}.jpg` : '')) : '';
                     const runningPaused = Boolean(runningFile && (runningFile.stage_key === 'PAUSED' || runningFile.status === 'PAUSE'));
@@ -3174,6 +3201,7 @@ HTML_TEMPLATE = """
                                     <span>Tồn cũ: <strong>${m.old_active || 0}</strong></span>
                                 </div>
                             </div>
+                            ${cncHealth}
                             ${runningInfo}
                         </div>
                     </div>`;

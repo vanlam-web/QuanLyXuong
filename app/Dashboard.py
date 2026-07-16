@@ -22,6 +22,12 @@ app = Flask(__name__)
 # --- CONFIG DUONG DAN EXE ---
 MACHINES = ["InBat", "InDecal", "CNC"]
 ADMIN_PIN = os.getenv("DASHBOARD_ADMIN_PIN", "").strip()
+EXPECTED_MACHINE_VERSIONS = {
+    "InBat": "V2.1.1_INDECAL_READY_RIP",
+    "InDecal": "V2.1.1_INDECAL_READY_RIP",
+    "CNC": "V2.1.0_TEST_CNC_BRIDGE",
+}
+RUNTIME_PROCESS_NAMES = ("server_Local", "Dashboard_Local", "cnc_legacy_bridge")
 
 THUMB_DIR = os.path.join(DB_DIR, "Thumbnails")
 os.makedirs(THUMB_DIR, exist_ok=True)
@@ -1278,6 +1284,95 @@ def ping_host(hostname):
     except Exception:
         return False
 
+def _normalize_runtime_process_name(name):
+    value = os.path.splitext(os.path.basename(str(name or "").strip()))[0]
+    return value or str(name or "").strip()
+
+def list_runtime_processes():
+    tracked = {f"{name}.exe".lower(): name for name in RUNTIME_PROCESS_NAMES}
+    processes = []
+    if os.name == "nt":
+        try:
+            ps_script = r"""
+            $names = @('server_Local.exe', 'Dashboard_Local.exe', 'cnc_legacy_bridge.exe')
+            $items = Get-CimInstance Win32_Process | Where-Object { $names -contains $_.Name } | Select-Object Name,ProcessId,ExecutablePath
+            if ($items) { $items | ConvertTo-Json -Compress -Depth 3 }
+            """
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=5,
+                shell=False,
+            )
+            payload = (result.stdout or "").strip()
+            if payload:
+                data = json.loads(payload)
+                if isinstance(data, dict):
+                    data = [data]
+                for row in data if isinstance(data, list) else []:
+                    name = _normalize_runtime_process_name(row.get("Name") or row.get("name"))
+                    if name in RUNTIME_PROCESS_NAMES:
+                        processes.append({
+                            "name": name,
+                            "pid": int(row.get("ProcessId") or row.get("pid") or 0),
+                            "path": row.get("ExecutablePath") or row.get("path") or "",
+                        })
+                if processes:
+                    return processes
+        except Exception:
+            pass
+        try:
+            result = subprocess.run(
+                ["tasklist", "/fo", "csv", "/nh"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=5,
+                shell=False,
+            )
+            import csv, io
+            for row in csv.reader(io.StringIO(result.stdout or "")):
+                if len(row) < 2:
+                    continue
+                image_name = row[0].strip().strip('"')
+                base = _normalize_runtime_process_name(image_name)
+                if image_name.lower() not in tracked and base not in RUNTIME_PROCESS_NAMES:
+                    continue
+                pid_text = row[1].replace(",", "").strip().strip('"')
+                try:
+                    pid = int(pid_text)
+                except Exception:
+                    pid = 0
+                processes.append({
+                    "name": base if base in RUNTIME_PROCESS_NAMES else tracked.get(image_name.lower(), base),
+                    "pid": pid,
+                    "path": "",
+                })
+        except Exception:
+            pass
+    return processes
+
+def summarize_runtime_processes(processes):
+    summary = {}
+    for item in processes or []:
+        name = _normalize_runtime_process_name(item.get("name"))
+        if name not in RUNTIME_PROCESS_NAMES:
+            continue
+        bucket = summary.setdefault(name, {"name": name, "count": 0, "pids": [], "paths": []})
+        bucket["count"] += 1
+        pid = item.get("pid")
+        if pid is not None and pid != "":
+            try:
+                bucket["pids"].append(int(pid))
+            except Exception:
+                pass
+        path = str(item.get("path") or "").strip()
+        if path and path not in bucket["paths"]:
+            bucket["paths"].append(path)
+    return summary
+
 def get_v2_status_snapshot(data_dir=DB_DIR):
     outboxes = []
     try:
@@ -1315,11 +1410,15 @@ def get_v2_status_snapshot(data_dir=DB_DIR):
         versions = {"error": str(exc)}
 
     rename_audit = inspect_indecal_rename_audit(data_dir)
+    runtime_processes = summarize_runtime_processes(list_runtime_processes())
     machines = [inspect_machine_db(machine, data_dir) for machine in MACHINES]
     for machine in machines:
         version = versions.get(machine["machine"]) if isinstance(versions, dict) else ""
         if version and not machine.get("version"):
             machine["version"] = version
+        expected_version = EXPECTED_MACHINE_VERSIONS.get(machine["machine"], "")
+        machine["expected_version"] = expected_version
+        machine["version_ok"] = None if not expected_version else bool(machine.get("version")) and machine.get("version") == expected_version
     warnings = []
     if not os.path.isdir(data_dir):
         warnings.append(f"Data folder missing: {data_dir}")
@@ -1331,8 +1430,20 @@ def get_v2_status_snapshot(data_dir=DB_DIR):
     for machine in machines:
         if not machine.get("ok"):
             warnings.append(f"{machine['machine']} lỗi database: {machine['error']}")
-        if machine.get("online") and not str(machine.get("version", "")).startswith("V2."):
-            warnings.append(f"{machine['machine']} đang mở nhưng chưa lên V2")
+        expected_version = machine.get("expected_version", "")
+        current_version = str(machine.get("version", "")).strip()
+        if machine.get("online"):
+            if expected_version:
+                if not machine.get("version_ok"):
+                    if current_version:
+                        warnings.append(f"{machine['machine']} version {current_version} != expected {expected_version}")
+                    else:
+                        warnings.append(f"{machine['machine']} đang mở nhưng chưa báo version mong đợi {expected_version}")
+            elif not current_version.startswith("V2."):
+                warnings.append(f"{machine['machine']} đang mở nhưng chưa lên V2")
+    for name, process in runtime_processes.items():
+        if int(process.get("count", 0)) > 1:
+            warnings.append(f"Duplicate process {name} count={process['count']}")
 
     return {
         "generated_at": now(),
@@ -1342,6 +1453,7 @@ def get_v2_status_snapshot(data_dir=DB_DIR):
         "versions": versions,
         "version_history": read_version_history(),
         "machines": machines,
+        "runtime_processes": runtime_processes,
         "outboxes": outboxes,
         "rename_audit": rename_audit,
         "logs": logs,
@@ -1472,10 +1584,11 @@ HTML_TEMPLATE = """
         .version-status-table { table-layout: auto; }
         .version-status-table th, .version-status-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .version-status-table th:nth-child(1), .version-status-table td:nth-child(1) { width: 72px; }
-        .version-status-table th:nth-child(2), .version-status-table td:nth-child(2) { width: 34%; min-width: 190px; }
-        .version-status-table th:nth-child(3), .version-status-table td:nth-child(3) { width: 24%; max-width: 210px; }
-        .version-status-table th:nth-child(4), .version-status-table td:nth-child(4) { width: 26%; min-width: 160px; }
-        .version-status-table th:nth-child(5), .version-status-table td:nth-child(5) { width: 88px; }
+        .version-status-table th:nth-child(2), .version-status-table td:nth-child(2) { width: 27%; min-width: 170px; }
+        .version-status-table th:nth-child(3), .version-status-table td:nth-child(3) { width: 27%; min-width: 170px; }
+        .version-status-table th:nth-child(4), .version-status-table td:nth-child(4) { width: 18%; max-width: 180px; }
+        .version-status-table th:nth-child(5), .version-status-table td:nth-child(5) { width: 22%; min-width: 150px; }
+        .version-status-table th:nth-child(6), .version-status-table td:nth-child(6) { width: 74px; }
         .version-status-table tbody tr { cursor: pointer; }
         .version-status-table tbody tr:hover { background: rgba(96,165,250,.12); }
         .version-status-table tbody tr.active { background: rgba(96,165,250,.2); outline: 1px solid rgba(96,165,250,.45); }
@@ -3078,23 +3191,40 @@ HTML_TEMPLATE = """
                         <div class="system-note-row"><span>Ý nghĩa</span><strong>Máy trạm chưa có hàng chờ gửi, hoặc outbox đang nằm local trên máy trạm</strong></div>
                         <div class="system-note-row"><span>Lịch sử</span><strong>Xem trong log server/máy trạm. Outbox hiện chỉ phục vụ retry, không phải báo cáo lịch sử đầy đủ.</strong></div>
                     </div>`;
+                const runtimeProcesses = Object.values(data.runtime_processes || {});
+                const runtimeDuplicateCount = runtimeProcesses.filter(p => Number(p.count || 0) > 1).length;
+                const runtimeTotal = runtimeProcesses.reduce((sum, p) => sum + Number(p.count || 0), 0);
+                const runtimeRows = runtimeProcesses.length
+                    ? `<table class="status-table"><thead><tr><th>Tiến trình</th><th>Số lượng</th><th>PID</th><th>Đường dẫn</th></tr></thead><tbody>${runtimeProcesses.map(p => {
+                        const count = Number(p.count || 0);
+                        return `<tr><td class="${count > 1 ? 'version-old' : 'version-ok'}">${escapeHtml(p.name || '')}</td><td>${count}</td><td>${escapeHtml((p.pids || []).join(', ') || 'n/a')}</td><td>${escapeHtml((p.paths || []).join(' | ') || 'n/a')}</td></tr>`;
+                    }).join('')}</tbody></table>`
+                    : `<div class="system-note-list">
+                        <div class="system-note-row"><span>Trạng thái</span><strong>Chưa thấy tiến trình V2 đang chạy trên máy dashboard</strong></div>
+                        <div class="system-note-row"><span>Theo dõi</span><strong>server_Local, Dashboard_Local, cnc_legacy_bridge</strong></div>
+                    </div>`;
                 const versionRows = machines.map(m => {
                     const version = m.version || (data.versions || {})[m.machine] || 'chưa báo';
+                    const expectedVersion = m.expected_version || '';
+                    const versionOk = m.version_ok === true;
+                    const versionStatus = expectedVersion ? (versionOk ? 'Khớp' : 'Lệch') : 'Chưa đặt';
+                    const versionStatusClass = expectedVersion ? (versionOk ? 'version-ok' : 'version-old') : 'muted';
                     const ping = m.last_ping ? `${escapeHtml(m.last_ping)} (${escapeHtml(formatAge(m.ping_age_seconds))})` : 'chưa có ping';
                     return `<tr data-version-machine="${escapeHtml(m.machine)}" onclick="showVersionHistory('${escapeHtml(m.machine)}')">
                         <td>${escapeHtml(m.machine)}</td>
-                        <td class="${versionClass(version)}">${escapeHtml(version)}</td>
+                        <td class="${versionStatusClass}">${escapeHtml(version)}</td>
+                        <td class="${versionStatusClass}">${escapeHtml(expectedVersion || 'chưa đặt')}</td>
                         <td>${escapeHtml(m.hostname || m.machine)}</td>
                         <td>${ping}</td>
-                        <td>${m.online ? 'Đang mở' : (m.network_online ? 'Máy bật - chưa V2' : 'Chưa mở')}</td>
+                        <td class="${versionStatusClass}">${escapeHtml(versionStatus)}</td>
                     </tr>`;
                 }).join('');
                 const serverVersion = (data.versions || {}).Server || 'chưa báo';
                 const currentVersions = `
                     <table class="status-table version-status-table">
-                        <thead><tr><th>Máy</th><th>Bản đang chạy</th><th>Hostname</th><th>Ping cuối</th><th>Trạng thái</th></tr></thead>
+                        <thead><tr><th>Máy</th><th>Bản đang chạy</th><th>Bản mong đợi</th><th>Hostname</th><th>Ping cuối</th><th>Khớp</th></tr></thead>
                         <tbody>
-                            <tr data-version-machine="Server" onclick="showVersionHistory('Server')"><td>Server</td><td class="${versionClass(serverVersion)}">${escapeHtml(serverVersion)}</td><td>${escapeHtml(data.data_dir || '')}</td><td>${escapeHtml(data.generated_at || '')}</td><td>Đang chạy</td></tr>
+                            <tr data-version-machine="Server" onclick="showVersionHistory('Server')"><td>Server</td><td class="${versionClass(serverVersion)}">${escapeHtml(serverVersion)}</td><td class="muted">Theo server.py</td><td>${escapeHtml(data.data_dir || '')}</td><td>${escapeHtml(data.generated_at || '')}</td><td class="muted">Theo dõi</td></tr>
                             ${versionRows}
                         </tbody>
                     </table>
@@ -3133,6 +3263,13 @@ HTML_TEMPLATE = """
                         badgeClass: 'pill-ok',
                         path: 'Bản đang chạy và lịch sử đổi phiên bản',
                         body: versions
+                    },
+                    {
+                        name: 'Tiến trình V2',
+                        badge: runtimeDuplicateCount || runtimeTotal,
+                        badgeClass: runtimeDuplicateCount ? 'pill-warn' : (runtimeTotal ? 'pill-ok' : 'pill-idle'),
+                        path: 'Phát hiện server/dashboard/bridge chạy trùng',
+                        body: runtimeRows
                     },
                     {
                         name: 'Tổng quan',
@@ -3231,7 +3368,7 @@ HTML_TEMPLATE = """
             const body = rows.map(item => `<tr><td>${escapeHtml(item.time)}</td><td>${escapeHtml(item.version)}</td></tr>`).join('');
             const historyRow = document.createElement('tr');
             historyRow.className = 'version-inline-history';
-            historyRow.innerHTML = `<td colspan="5">
+            historyRow.innerHTML = `<td colspan="6">
                 <div class="system-note-row"><span>Lịch sử đổi bản</span><strong>${escapeHtml(machine)} · ${rows.length} mốc gần nhất</strong></div>
                 ${body ? `<table class="status-table version-history-table"><thead><tr><th>Thời gian</th><th>Phiên bản</th></tr></thead><tbody>${body}</tbody></table>` : '<div class="sidebar-note">Chưa có lịch sử đổi bản cho máy này.</div>'}
             </td>`;
@@ -3239,7 +3376,7 @@ HTML_TEMPLATE = """
         }
 
         function selectSystemLog(index) {
-            const offset = 4;
+            const offset = 5;
             selectSystemItem(index + offset);
         }
 

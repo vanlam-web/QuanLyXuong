@@ -101,6 +101,47 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertEqual(status["outboxes"][0]["pending"], 1)
         self.assertTrue(any("pending=1" in warning for warning in status["warnings"]))
 
+    def test_v2_status_reads_cnc_bridge_health_fields(self):
+        self.make_machine_db("CNC")
+        db_path = os.path.join(self.temp_dir.name, "CNC.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES ('cnc_ncstudio_state', 'RUNNING')")
+        conn.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES ('cnc_ncstudio_log_mtime', '2026-07-13 13:50:32')")
+        conn.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES ('cnc_ncstudio_current_job', 'D:\\CNC\\job.tap')")
+        conn.commit()
+        conn.close()
+
+        status = Dashboard.get_v2_status_snapshot(self.temp_dir.name)
+
+        cnc = next(item for item in status["machines"] if item["machine"] == "CNC")
+        self.assertEqual(cnc["cnc_ncstudio_state"], "RUNNING")
+        self.assertEqual(cnc["cnc_ncstudio_log_mtime"], "2026-07-13 13:50:32")
+        self.assertEqual(cnc["cnc_ncstudio_current_job"], "D:\\CNC\\job.tap")
+
+    def test_v2_status_reports_duplicate_runtime_processes(self):
+        self.make_machine_db("InBat")
+        old_expected = getattr(Dashboard, "EXPECTED_MACHINE_VERSIONS", None)
+        Dashboard.EXPECTED_MACHINE_VERSIONS = {
+            "InBat": "V2.1.0_TEST",
+            "InDecal": "V2.1.0_TEST",
+            "CNC": "V2.1.0_TEST_CNC_BRIDGE",
+        }
+        self.addCleanup(lambda: setattr(Dashboard, "EXPECTED_MACHINE_VERSIONS", old_expected))
+
+        fake_processes = [
+            {"name": "server_Local", "pid": 11, "path": r"C:\QuanLyXuong\server_Local.exe"},
+            {"name": "server_Local", "pid": 12, "path": r"C:\QuanLyXuong\server_Local.exe"},
+            {"name": "Dashboard_Local", "pid": 21, "path": r"C:\QuanLyXuong\Dashboard_Local.exe"},
+        ]
+
+        with mock.patch.object(Dashboard, "list_runtime_processes", return_value=fake_processes):
+            status = Dashboard.get_v2_status_snapshot(self.temp_dir.name)
+
+        self.assertEqual(status["runtime_processes"]["server_Local"]["count"], 2)
+        self.assertEqual(status["runtime_processes"]["Dashboard_Local"]["count"], 1)
+        self.assertTrue(any("Duplicate process server_Local count=2" in item for item in status["warnings"]))
+        self.assertEqual(status["overall"], "WARN")
+
     def test_v2_status_log_tail_keeps_more_context(self):
         log_path = os.path.join(self.temp_dir.name, "Server_Log.txt")
         with open(log_path, "w", encoding="utf-8") as handle:
@@ -117,6 +158,23 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertEqual(len(server_log["tail"]), Dashboard.SYSTEM_LOG_TAIL_LINES)
         self.assertEqual(server_log["tail"][0], "[2026-07-14 18:00:50] line-050")
         self.assertEqual(server_log["tail"][-1], "[2026-07-14 18:00:09] line-249")
+
+    def test_v2_status_warns_when_online_machine_version_is_not_expected(self):
+        self.make_machine_db("InBat")
+        old_expected = getattr(Dashboard, "EXPECTED_MACHINE_VERSIONS", None)
+        Dashboard.EXPECTED_MACHINE_VERSIONS = {
+            "InBat": "V2.1.0_TEST",
+            "InDecal": "V2.1.0_TEST",
+            "CNC": "V2.1.0_TEST_CNC_BRIDGE",
+        }
+        self.addCleanup(lambda: setattr(Dashboard, "EXPECTED_MACHINE_VERSIONS", old_expected))
+
+        status = Dashboard.get_v2_status_snapshot(self.temp_dir.name)
+
+        self.assertTrue(any("InBat version V2.0.0_OUTBOX_READY != expected V2.1.0_TEST" in warning for warning in status["warnings"]))
+        machine = next(item for item in status["machines"] if item["machine"] == "InBat")
+        self.assertEqual(machine["expected_version"], "V2.1.0_TEST")
+        self.assertFalse(machine["version_ok"])
 
     def test_v2_status_separates_waiting_files_from_machine_running(self):
         self.make_machine_db("InDecal")
@@ -2431,7 +2489,12 @@ class DashboardV2StatusTests(unittest.TestCase):
         self.assertIn("Audit rename, meta, RIP của máy InDecal", html)
         self.assertNotIn("name: 'Ghi chú'", html)
         self.assertNotIn("name: 'Ghi chú 2'", html)
-        self.assertIn("const offset = 4;", html)
+        self.assertIn("const offset = 5;", html)
+        self.assertIn("name: 'Tiến trình V2'", html)
+        self.assertIn("runtimeProcesses", html)
+        self.assertIn("Bản mong đợi", html)
+        self.assertIn(".machine-health", html)
+        self.assertIn("NcStudio:", html)
         self.assertIn('<div class="system-note-row"><span>Máy đang mở</span>', html)
         self.assertIn("Xuất file", html)
         self.assertIn('class="flow-dashboard"', html)

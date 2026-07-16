@@ -16,7 +16,7 @@ from machine_file_meta import collect_machine_file_meta_for_server
 SERVER_VERSION = "V7.6.7_INSTANCE_PING"
 MACHINES = dict(InBat="PRINT", InDecal="PRINT", CNC="CUT")
 ZALO_TARGET = os.getenv("SERVER_ZALO_TARGET", "")
-LOG_FILE = r"C:\QuanLyXuong\Server_Log.txt"
+LOG_FILE = os.getenv("QLX_SERVER_LOG_FILE", r"C:\QuanLyXuong\Server_Log.txt")
 NAS_EXE_PATH = NAS_SERVER_EXE_PATH
 CREATE_NO_WINDOW = 0x08000000  
 
@@ -464,6 +464,36 @@ class PingPayload(BaseModel):
     pid: Optional[int] = None
     start_time: Optional[str] = None
     instance_id: Optional[str] = None
+    cnc_bridge_source_path: Optional[str] = None
+    cnc_bridge_seen_at: Optional[str] = None
+    cnc_ncstudio_log_path: Optional[str] = None
+    cnc_ncstudio_log_exists: Optional[str] = None
+    cnc_ncstudio_log_mtime: Optional[str] = None
+    cnc_ncstudio_state: Optional[str] = None
+    cnc_ncstudio_last_line: Optional[str] = None
+    cnc_ncstudio_last_event_time: Optional[str] = None
+    cnc_ncstudio_current_job: Optional[str] = None
+
+PING_EXTRA_APP_INFO_KEYS = (
+    "cnc_bridge_source_path",
+    "cnc_bridge_seen_at",
+    "cnc_ncstudio_log_path",
+    "cnc_ncstudio_log_exists",
+    "cnc_ncstudio_log_mtime",
+    "cnc_ncstudio_state",
+    "cnc_ncstudio_last_line",
+    "cnc_ncstudio_last_event_time",
+    "cnc_ncstudio_current_job",
+)
+
+def ping_extra_app_info(data):
+    rows = {}
+    for key in PING_EXTRA_APP_INFO_KEYS:
+        value = getattr(data, key, None)
+        if value is None:
+            continue
+        rows[key] = str(value)
+    return rows
 
 @app.post("/api/ping")
 def ping_client(data: PingPayload):
@@ -486,6 +516,8 @@ def ping_client(data: PingPayload):
             conn.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES ('start_time', ?)", (data.start_time,))
         if data.instance_id:
             conn.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES ('instance_id', ?)", (data.instance_id,))
+        for key, value in ping_extra_app_info(data).items():
+            conn.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)", (key, value))
         conn.commit(); conn.close()
         if old_version != data.version or not old_ping:
             try:

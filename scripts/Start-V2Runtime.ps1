@@ -15,7 +15,17 @@ function Stop-IfRunning([string]$ProcessName) {
     if ($processes.Count -eq 0) { return }
     foreach ($process in $processes) {
         Write-Host "Stopping $ProcessName pid=$($process.Id)"
-        Stop-Process -Id $process.Id -Force
+        Stop-Process -Id $process.Id -Force -ErrorAction Stop
+    }
+    foreach ($process in $processes) {
+        try {
+            Wait-Process -Id $process.Id -Timeout 10 -ErrorAction Stop
+        } catch {
+            $stillRunning = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if ($stillRunning) {
+                throw "Cannot stop $ProcessName pid=$($process.Id). Run PowerShell as Administrator or stop NSSM service first."
+            }
+        }
     }
 }
 
@@ -26,6 +36,19 @@ function Stop-BridgePython {
         Write-Host "Stopping python bridge pid=$($process.ProcessId)"
         Stop-Process -Id $process.ProcessId -Force
     }
+}
+
+function Assert-SingleProcess([string]$ProcessName) {
+    $items = @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)
+    if ($items.Count -gt 1) {
+        $detail = ($items | ForEach-Object {
+            $path = ""
+            try { $path = $_.Path } catch { $path = "" }
+            "pid=$($_.Id) path=$path"
+        }) -join "; "
+        throw "Duplicate $ProcessName count=$($items.Count): $detail"
+    }
+    Write-Host "$ProcessName count=$($items.Count)"
 }
 
 function Copy-App([string]$SourceName, [string]$TargetName) {
@@ -117,4 +140,7 @@ foreach ($name in @("server_Local", "Dashboard_Local", "cnc_legacy_bridge")) {
         Write-Host "  pid=$($item.Id) path=$($item.Path)"
     }
 }
+Assert-SingleProcess "server_Local"
+Assert-SingleProcess "Dashboard_Local"
+Assert-SingleProcess "cnc_legacy_bridge"
 

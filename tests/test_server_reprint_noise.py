@@ -21,8 +21,11 @@ class ServerReprintNoiseTests(unittest.TestCase):
         self.addCleanup(self.temp_dir.cleanup)
         self.old_db_dir = server.DB_DIR
         self.old_thumb_dir = server.THUMB_DIR
+        self.old_log_file = server.LOG_FILE
         server.DB_DIR = self.temp_dir.name
         server.THUMB_DIR = os.path.join(self.temp_dir.name, "Thumbnails")
+        self.test_log_file = os.path.join(self.temp_dir.name, "Server_Log.txt")
+        server.LOG_FILE = self.test_log_file
         os.makedirs(server.THUMB_DIR, exist_ok=True)
         server.init_all_databases()
         self.addCleanup(self.restore_globals)
@@ -30,6 +33,7 @@ class ServerReprintNoiseTests(unittest.TestCase):
     def restore_globals(self):
         server.DB_DIR = self.old_db_dir
         server.THUMB_DIR = self.old_thumb_dir
+        server.LOG_FILE = self.old_log_file
 
     def post_event(self, event_type, event_time, event_id, thumbnail_b64=None, path=None, machine="inbat", forced_base_id=None, machine_meta=None):
         payload = server.RequestData(
@@ -87,6 +91,23 @@ class ServerReprintNoiseTests(unittest.TestCase):
             "event_time": "2026-07-13 09:10:11",
         }])
 
+    def test_post_event_writes_log_to_test_temp_file_only(self):
+        live_log = r"C:\QuanLyXuong\Server_Log.txt"
+        before_size = os.path.getsize(live_log) if os.path.exists(live_log) else 0
+
+        self.post_event(
+            "DONE",
+            "2026-07-10 15:27:57",
+            "test-log-isolation-done",
+            path=r"D:\2026-07-10\New Folder\log_isolation.prt",
+        )
+
+        after_size = os.path.getsize(live_log) if os.path.exists(live_log) else 0
+        self.assertEqual(after_size, before_size)
+        with open(self.test_log_file, "r", encoding="utf-8") as handle:
+            content = handle.read()
+        self.assertIn("[INBAT] DONE: log_isolation.prt", content)
+
     def test_ping_stores_client_instance_details(self):
         payload = server.PingPayload(
             machine="indecal",
@@ -110,6 +131,33 @@ class ServerReprintNoiseTests(unittest.TestCase):
         self.assertEqual(info["pid"], "4321")
         self.assertEqual(info["start_time"], "2026-07-13 16:30:00")
         self.assertEqual(info["instance_id"], "DECAL-PC-4321-abcd")
+
+    def test_ping_stores_cnc_bridge_and_ncstudio_health(self):
+        payload = server.PingPayload(
+            machine="cnc",
+            version="V2.1.0_TEST_CNC_BRIDGE",
+            hostname="CNC qua bridge V1",
+            cnc_bridge_source_path=r"\\CNC\CNC\CLIENT_CNC\file_history.csv",
+            cnc_bridge_seen_at="2026-07-13 14:00:00",
+            cnc_ncstudio_state="EXITED",
+            cnc_ncstudio_log_mtime="2026-07-13 13:55:00",
+            cnc_ncstudio_last_event_time="2026-07-13 13:55:00",
+            cnc_ncstudio_current_job=r"D:\CNC\job.tap",
+        )
+
+        result = server.ping_client(payload)
+
+        self.assertEqual(result["status"], "ok")
+        conn = sqlite3.connect(os.path.join(self.temp_dir.name, "CNC.db"))
+        try:
+            info = dict(conn.execute("SELECT key, value FROM app_info").fetchall())
+        finally:
+            conn.close()
+        self.assertEqual(info["version"], "V2.1.0_TEST_CNC_BRIDGE")
+        self.assertEqual(info["cnc_bridge_source_path"], r"\\CNC\CNC\CLIENT_CNC\file_history.csv")
+        self.assertEqual(info["cnc_bridge_seen_at"], "2026-07-13 14:00:00")
+        self.assertEqual(info["cnc_ncstudio_state"], "EXITED")
+        self.assertEqual(info["cnc_ncstudio_current_job"], r"D:\CNC\job.tap")
 
     def test_printing_after_done_creates_reprint_row_waiting_for_second_done(self):
         self.post_event("PRINTING", "2026-07-10 15:26:40", "evt-print-1")
